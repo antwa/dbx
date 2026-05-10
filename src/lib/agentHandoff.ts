@@ -22,8 +22,13 @@ export function isPendingHandoff(item: AgentHandoffItem): boolean {
   return item.status === "queued" || item.status === "shown";
 }
 
-export function mergeLoadedHandoffs(items: AgentHandoffItem[]): AgentHandoffItem[] {
-  return items.filter(isPendingHandoff).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+export function mergeLoadedHandoffs(
+  items: AgentHandoffItem[],
+  ignoredIds: ReadonlySet<string> = new Set(),
+): AgentHandoffItem[] {
+  return items
+    .filter((item) => isPendingHandoff(item) && !ignoredIds.has(item.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
 export function updateHandoffStatus(

@@ -55,3 +55,20 @@ test("updateHandoffStatus marks shown and removes rejected handoffs from pending
   const rejected = updateHandoffStatus(shown, "1", "rejected");
   assert.deepEqual(rejected, []);
 });
+
+test("updateHandoffStatus does not let shown overwrite rejected handoffs", () => {
+  const rejected = updateHandoffStatus([handoff("1", "shown")], "1", "rejected");
+
+  const staleShown = updateHandoffStatus(rejected, "1", "shown");
+
+  assert.deepEqual(staleShown, []);
+});
+
+test("mergeLoadedHandoffs can ignore locally closed handoffs from stale loads", () => {
+  const merged = mergeLoadedHandoffs([handoff("1", "shown"), handoff("2", "queued")], new Set(["1"]));
+
+  assert.deepEqual(
+    merged.map((item) => item.id),
+    ["2"],
+  );
+});

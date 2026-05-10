@@ -325,7 +325,10 @@ async fn route_request(first_line: &str, body: &str, state: &AgentRuntimeState) 
         if let Some(limit) = query_limit(first_line) {
             truncate_result_rows(&mut body, limit);
         }
-        return RuntimeResponse { status: "200 OK", body };
+        return RuntimeResponse {
+            status: "200 OK",
+            body,
+        };
     }
 
     if first_line.starts_with("POST /handoff ") {
@@ -347,12 +350,7 @@ async fn route_request(first_line: &str, body: &str, state: &AgentRuntimeState) 
     RuntimeResponse { status: "404 Not Found", body: serde_json::json!({"error": "not found"}) }
 }
 
-async fn update_handoff_status(
-    app_state: &AppState,
-    runtime: &AgentRuntimeState,
-    id: &str,
-    status: HandoffStatus,
-) -> Result<bool, String> {
+async fn update_handoff_status(app_state: &AppState, runtime: &AgentRuntimeState, id: &str, status: HandoffStatus) -> Result<bool, String> {
     let stored = app_state.storage.update_handoff_status(id, status.clone()).await?;
     let runtime_updated = update_runtime_handoff_status(runtime, id, status).await;
     Ok(stored || runtime_updated)
@@ -361,10 +359,24 @@ async fn update_handoff_status(
 async fn update_runtime_handoff_status(state: &AgentRuntimeState, id: &str, status: HandoffStatus) -> bool {
     let mut handoffs = state.handoffs.write().await;
     if let Some(item) = handoffs.iter_mut().find(|item| item.id == id) {
+        if !can_update_runtime_handoff_status(&item.status, &status) {
+            return false;
+        }
         item.status = status;
         return true;
     }
     false
+}
+
+fn can_update_runtime_handoff_status(current: &HandoffStatus, next: &HandoffStatus) -> bool {
+    matches!(
+        (current, next),
+        (HandoffStatus::Queued | HandoffStatus::Shown, HandoffStatus::Shown)
+            | (HandoffStatus::Queued | HandoffStatus::Shown, HandoffStatus::Rejected)
+            | (HandoffStatus::Queued | HandoffStatus::Shown | HandoffStatus::Approved, HandoffStatus::Approved)
+            | (HandoffStatus::Approved | HandoffStatus::Executed, HandoffStatus::Executed)
+            | (HandoffStatus::Approved | HandoffStatus::Executed | HandoffStatus::Failed, HandoffStatus::Failed)
+    )
 }
 
 async fn pending_runtime_handoffs(state: &AgentRuntimeState) -> Vec<HandoffItem> {
@@ -632,6 +644,7 @@ mod tests {
 
         assert!(update_runtime_handoff_status(&state, &id, dbx_core::handoff::HandoffStatus::Rejected).await);
         assert!(pending_runtime_handoffs(&state).await.is_empty());
+        assert!(!update_runtime_handoff_status(&state, &id, dbx_core::handoff::HandoffStatus::Shown).await);
     }
 
     #[test]

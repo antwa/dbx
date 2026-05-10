@@ -17,6 +17,7 @@ export const useAgentRuntimeStore = defineStore("agentRuntime", () => {
   const handoffs = ref<AgentHandoffItem[]>([]);
   const activeHandoffId = ref<string | null>(null);
   const handoffDialogOpen = ref(false);
+  const locallyClosedHandoffIds = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const activeHandoff = computed(() => handoffs.value.find((item) => item.id === activeHandoffId.value) ?? null);
@@ -59,7 +60,7 @@ export const useAgentRuntimeStore = defineStore("agentRuntime", () => {
   }
 
   async function loadHandoffs() {
-    const loaded = mergeLoadedHandoffs(await api.agentRuntimeLoadHandoffs());
+    const loaded = mergeLoadedHandoffs(await api.agentRuntimeLoadHandoffs(), locallyClosedHandoffIds);
     handoffs.value = loaded;
     const state = deriveHandoffDialogState(loaded, activeHandoffId.value);
     activeHandoffId.value = state.active?.id ?? null;
@@ -76,6 +77,7 @@ export const useAgentRuntimeStore = defineStore("agentRuntime", () => {
 
   async function rejectHandoff(id: string) {
     await api.agentRuntimeRejectHandoff(id);
+    locallyClosedHandoffIds.add(id);
     handoffs.value = updateHandoffStatus(handoffs.value, id, "rejected");
     const state = deriveHandoffDialogState(handoffs.value, activeHandoffId.value === id ? null : activeHandoffId.value);
     activeHandoffId.value = state.active?.id ?? null;

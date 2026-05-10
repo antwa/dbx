@@ -144,11 +144,10 @@ async fn ensure_history_columns(pool: &SqlitePool) -> Result<(), String> {
 }
 
 async fn ensure_handoffs_sequence(pool: &SqlitePool) -> Result<(), String> {
-    let (seq_columns,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('handoffs') WHERE name = 'seq'")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let (seq_columns,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('handoffs') WHERE name = 'seq'")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if seq_columns > 0 {
         return Ok(());
@@ -322,29 +321,26 @@ impl Storage {
     }
 
     pub async fn update_handoff_status(&self, id: &str, status: HandoffStatus) -> Result<bool, String> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT payload_json FROM handoffs WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.db)
-            .await
-            .map_err(|e| e.to_string())?;
-        let Some((payload_json,)) = row else {
+        let from_statuses = allowed_handoff_status_transitions(&status);
+        if from_statuses.is_empty() {
             return Ok(false);
-        };
+        }
 
-        let mut item: HandoffItem = serde_json::from_str(&payload_json).map_err(|e| e.to_string())?;
-        item.status = status;
-        let updated_json = serde_json::to_string(&item).map_err(|e| e.to_string())?;
-        let status_value = handoff_status_value(&item.status)?;
+        let status_value = handoff_status_value(&status)?;
 
-        sqlx::query("UPDATE handoffs SET payload_json = ?, status = ? WHERE id = ?")
-            .bind(updated_json)
+        let result = sqlx::query(
+            "UPDATE handoffs SET payload_json = json_set(payload_json, '$.status', ?), status = ? \
+             WHERE id = ? AND status IN (SELECT value FROM json_each(?))",
+        )
+            .bind(status_value.clone())
             .bind(status_value)
             .bind(id)
+            .bind(serde_json::to_string(&from_statuses).map_err(|e| e.to_string())?)
             .execute(&self.db)
             .await
             .map_err(|e| e.to_string())?;
 
-        Ok(true)
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn load_pending_handoffs(&self) -> Result<Vec<HandoffItem>, String> {
@@ -366,6 +362,17 @@ fn handoff_status_value(status: &HandoffStatus) -> Result<String, String> {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .ok_or_else(|| "Failed to serialize handoff status".to_string())
+}
+
+fn allowed_handoff_status_transitions(status: &HandoffStatus) -> &'static [&'static str] {
+    match status {
+        HandoffStatus::Queued => &[],
+        HandoffStatus::Shown => &["queued", "shown"],
+        HandoffStatus::Approved => &["queued", "shown", "approved"],
+        HandoffStatus::Rejected => &["queued", "shown"],
+        HandoffStatus::Executed => &["approved", "executed"],
+        HandoffStatus::Failed => &["approved", "executed", "failed"],
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,8 +1095,10 @@ mod handoff_tests {
     async fn handoffs_table_has_stable_autoincrement_sequence() {
         let storage = open_temp_storage().await;
 
-        let columns: Vec<(String,)> =
-            sqlx::query_as("SELECT name FROM pragma_table_info('handoffs')").fetch_all(&storage.db).await.unwrap();
+        let columns: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('handoffs')")
+            .fetch_all(&storage.db)
+            .await
+            .unwrap();
 
         assert!(columns.iter().any(|(name,)| name == "seq"));
     }
@@ -1125,12 +1134,15 @@ mod handoff_tests {
     async fn update_handoff_status_updates_payload_and_pending_visibility() {
         let storage = open_temp_storage().await;
         let item = queued_handoff("review me");
+        let queued_reject = queued_handoff("reject from queued");
         let missing = uuid::Uuid::new_v4().to_string();
 
         storage.save_handoff(&item).await.unwrap();
+        storage.save_handoff(&queued_reject).await.unwrap();
 
         assert!(storage.update_handoff_status(&item.id, HandoffStatus::Shown).await.unwrap());
         assert!(!storage.update_handoff_status(&missing, HandoffStatus::Rejected).await.unwrap());
+        assert!(storage.update_handoff_status(&queued_reject.id, HandoffStatus::Rejected).await.unwrap());
 
         let shown = storage.load_pending_handoffs().await.unwrap();
         assert_eq!(shown.len(), 1);
@@ -1138,6 +1150,46 @@ mod handoff_tests {
 
         assert!(storage.update_handoff_status(&item.id, HandoffStatus::Rejected).await.unwrap());
         assert!(storage.load_pending_handoffs().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_handoff_status_does_not_let_shown_overwrite_rejected() {
+        let storage = open_temp_storage().await;
+        let item = queued_handoff("reject wins");
+
+        storage.save_handoff(&item).await.unwrap();
+
+        assert!(storage.update_handoff_status(&item.id, HandoffStatus::Rejected).await.unwrap());
+        assert!(!storage.update_handoff_status(&item.id, HandoffStatus::Shown).await.unwrap());
+
+        assert!(storage.load_pending_handoffs().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_handoff_status_only_marks_shown_from_queued_or_shown() {
+        let storage = open_temp_storage().await;
+        let queued = queued_handoff("queued");
+        let mut shown = queued_handoff("shown");
+        shown.status = HandoffStatus::Shown;
+        let mut approved = queued_handoff("approved");
+        approved.status = HandoffStatus::Approved;
+        let mut executed = queued_handoff("executed");
+        executed.status = HandoffStatus::Executed;
+        let mut failed = queued_handoff("failed");
+        failed.status = HandoffStatus::Failed;
+
+        for item in [&queued, &shown, &approved, &executed, &failed] {
+            storage.save_handoff(item).await.unwrap();
+        }
+
+        assert!(storage.update_handoff_status(&queued.id, HandoffStatus::Shown).await.unwrap());
+        assert!(storage.update_handoff_status(&shown.id, HandoffStatus::Shown).await.unwrap());
+        assert!(!storage.update_handoff_status(&approved.id, HandoffStatus::Shown).await.unwrap());
+        assert!(!storage.update_handoff_status(&executed.id, HandoffStatus::Shown).await.unwrap());
+        assert!(!storage.update_handoff_status(&failed.id, HandoffStatus::Shown).await.unwrap());
+
+        let loaded = storage.load_pending_handoffs().await.unwrap();
+        assert_eq!(loaded.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec![queued.id, shown.id]);
     }
 }
 
