@@ -364,9 +364,7 @@ async fn safe_query(args: &[String]) -> CliEnvelope<serde_json::Value> {
     };
     let database = option_value(args, "--db").or(config.database.as_deref()).unwrap_or("");
 
-    match dbx_core::query::execute_sql_statement_with_row_limit(&state, &config.id, database, sql, None, None, limit)
-        .await
-    {
+    match dbx_core::query::execute_sql_statement_with_row_limit(&state, &config.id, database, sql, None, None, limit).await {
         Ok(result) => ok(
             CliSource::Headless,
             serde_json::json!({
@@ -595,19 +593,16 @@ mod tests {
     async fn create_large_sqlite_fixture(path: &std::path::Path, row_count: usize) {
         std::fs::File::create(path).unwrap();
         let pool = dbx_core::db::sqlite::connect_path(&path.display().to_string()).await.unwrap();
-        dbx_core::db::sqlite::execute_query(
-            &pool,
-            "CREATE TABLE numbers (id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
-        )
-        .await
-        .unwrap();
+        dbx_core::db::sqlite::execute_query(&pool, "CREATE TABLE numbers (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+            .await
+            .unwrap();
         for id in 1..=row_count {
             dbx_core::db::sqlite::execute_query(
                 &pool,
                 &format!("INSERT INTO numbers (id, value) VALUES ({id}, 'value-{id}')"),
             )
-            .await
-            .unwrap();
+                .await
+                .unwrap();
         }
         pool.close().await;
     }

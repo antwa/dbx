@@ -306,7 +306,10 @@ async fn route_request(first_line: &str, body: &str, state: &AgentRuntimeState) 
         if let Some(limit) = query_limit(first_line) {
             truncate_result_rows(&mut body, limit);
         }
-        return RuntimeResponse { status: "200 OK", body };
+        return RuntimeResponse {
+            status: "200 OK",
+            body,
+        };
     }
 
     if first_line.starts_with("POST /handoff ") {

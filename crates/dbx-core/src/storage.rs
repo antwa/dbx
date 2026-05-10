@@ -144,11 +144,10 @@ async fn ensure_history_columns(pool: &SqlitePool) -> Result<(), String> {
 }
 
 async fn ensure_handoffs_sequence(pool: &SqlitePool) -> Result<(), String> {
-    let (seq_columns,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('handoffs') WHERE name = 'seq'")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let (seq_columns,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('handoffs') WHERE name = 'seq'")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if seq_columns > 0 {
         return Ok(());
@@ -1058,8 +1057,10 @@ mod handoff_tests {
     async fn handoffs_table_has_stable_autoincrement_sequence() {
         let storage = open_temp_storage().await;
 
-        let columns: Vec<(String,)> =
-            sqlx::query_as("SELECT name FROM pragma_table_info('handoffs')").fetch_all(&storage.db).await.unwrap();
+        let columns: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('handoffs')")
+            .fetch_all(&storage.db)
+            .await
+            .unwrap();
 
         assert!(columns.iter().any(|(name,)| name == "seq"));
     }
