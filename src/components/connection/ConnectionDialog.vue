@@ -16,6 +16,7 @@ import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import * as api from "@/lib/api";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { applyParsedConnectionUrl, parseConnectionUrl } from "@/lib/connectionUrl";
+import { connectionUrlPlaceholder as getUrlPlaceholder } from "@/lib/connectionPresentation";
 import { ArrowLeft, ChevronRight, Copy, ExternalLink, FolderOpen, Grid3X3, Link2, List, Search } from "lucide-vue-next";
 
 type DbOption = { value: string; label: string };
@@ -419,6 +420,8 @@ const filteredDbCategories = computed<DbCategory[]>(() => {
 const hasDbPickerResults = computed(() => filteredDbCategories.value.some((category) => category.options.length > 0));
 const selectedDbIcon = computed(() => iconTypeMap[selectedType.value] || selectedProfile().icon || selectedType.value);
 const isJdbcConnection = computed(() => form.value.db_type === "jdbc");
+
+const connectionUrlPlaceholder = computed(() => getUrlPlaceholder(form.value.db_type));
 const canUseSsh = computed(() => form.value.db_type !== "sqlite" && form.value.db_type !== "jdbc");
 const canUseProxy = computed(
   () => form.value.db_type !== "sqlite" && form.value.db_type !== "duckdb" && form.value.db_type !== "jdbc",
@@ -817,7 +820,7 @@ function openExternalUrl(url: string) {
                     <Input
                       v-model="connectionUrlInput"
                       class="flex-1"
-                      :placeholder="t('connection.connectionUrlPlaceholder')"
+                      :placeholder="connectionUrlPlaceholder"
                       @keydown.enter.prevent="applyConnectionUrl"
                     />
                     <Tooltip>

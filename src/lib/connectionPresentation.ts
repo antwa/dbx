@@ -1,4 +1,4 @@
-import type { ConnectionConfig } from "@/types/database";
+import type { ConnectionConfig, DatabaseType } from "@/types/database";
 
 type ConnectionPresentationConfig = Pick<
   ConnectionConfig,
@@ -22,6 +22,53 @@ export function connectionEndpointLabel(connection?: ConnectionPresentationConfi
   }
   if (connection.host && connection.port) return `${connection.host}:${connection.port}`;
   return connection.host || connection.database || "";
+}
+
+export function connectionUrlPlaceholder(dbType: DatabaseType): string {
+  switch (dbType) {
+    case "mysql":
+    case "doris":
+    case "starrocks":
+      return "mysql://user:password@host:port/database";
+
+    case "postgres":
+    case "gaussdb":
+    case "redshift":
+      return "postgresql://user:password@host:port/database";
+
+    case "redis":
+      return "redis://:password@host:port/0";
+
+    case "sqlite":
+      return "sqlite:///absolute/path/to/database.db";
+
+    case "duckdb":
+      return "duckdb:///absolute/path/to/database.duckdb";
+
+    case "mongodb":
+      return "mongodb://user:password@host:port/database";
+
+    case "clickhouse":
+      return "clickhouse://user:password@host:port/database";
+
+    case "sqlserver":
+      return "mssql://user:password@host:port/database";
+
+    case "oracle":
+      return "oracle://user:password@host:port/service_name";
+
+    case "elasticsearch":
+      return "http://user:password@host:port";
+
+    case "dameng":
+      return "dm://user:password@host:port";
+
+    case "jdbc":
+      return "jdbc:mysql://host:3306/database";
+
+    default:
+      return "postgresql://user:password@host:port/database";
+  }
 }
 
 export function connectionOptionSubtitle(connection?: ConnectionPresentationConfig): string {
