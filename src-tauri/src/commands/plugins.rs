@@ -7,6 +7,7 @@ use serde::Serialize;
 use super::connection::AppState;
 
 const JDBC_PLUGIN_DOWNLOAD_URL: &str = "https://github.com/t8y2/dbx/releases/latest/download/dbx-jdbc-plugin-0.1.0.zip";
+const JDBC_PLUGIN_R2_PATH: &str = "releases/latest/dbx-jdbc-plugin-0.1.0.zip";
 
 #[tauri::command]
 pub async fn list_plugins(state: State<'_, Arc<AppState>>) -> Result<Vec<InstalledPlugin>, String> {
@@ -152,9 +153,10 @@ async fn download_jdbc_plugin_zip() -> Result<Vec<u8>, String> {
         .build()
         .map_err(|err| err.to_string())?;
 
-    let resp = dbx_core::race_github_proxies(&client, JDBC_PLUGIN_DOWNLOAD_URL, "dbx-jdbc-plugin-installer")
-        .await
-        .map_err(|err| format!("Failed to download JDBC plugin: {err}"))?;
+    let resp =
+        dbx_core::race_download(&client, JDBC_PLUGIN_DOWNLOAD_URL, JDBC_PLUGIN_R2_PATH, "dbx-jdbc-plugin-installer")
+            .await
+            .map_err(|err| format!("Failed to download JDBC plugin: {err}"))?;
 
     let bytes = resp.bytes().await.map_err(|err| err.to_string())?;
     Ok(bytes.to_vec())
