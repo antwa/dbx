@@ -26,6 +26,13 @@ export function isFocusSearchShortcut(event: ShortcutLikeEvent): boolean {
   return event.key.toLowerCase() === "f";
 }
 
+export function isSaveShortcut(event: ShortcutLikeEvent): boolean {
+  if (event.isComposing) return false;
+  if (event.altKey) return false;
+  if (!event.metaKey && !event.ctrlKey) return false;
+  return event.key.toLowerCase() === "s";
+}
+
 export function isCancelSearchShortcut(event: ShortcutLikeEvent): boolean {
   if (event.isComposing) return false;
   return event.key === "Escape";

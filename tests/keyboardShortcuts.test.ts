@@ -5,6 +5,7 @@ import {
   isCloseTabShortcut,
   isExecuteSqlShortcut,
   isFocusSearchShortcut,
+  isSaveShortcut,
 } from "../src/lib/keyboardShortcuts.ts";
 
 test("matches Cmd+Enter for SQL execution", () => {
@@ -45,6 +46,22 @@ test("ignores focus search shortcut while composing", () => {
 
 test("ignores Alt+F for focusing search", () => {
   assert.equal(isFocusSearchShortcut({ key: "f", altKey: true }), false);
+});
+
+test("matches Cmd+S for saving", () => {
+  assert.equal(isSaveShortcut({ key: "s", metaKey: true }), true);
+});
+
+test("matches Ctrl+S for saving", () => {
+  assert.equal(isSaveShortcut({ key: "S", ctrlKey: true }), true);
+});
+
+test("ignores save shortcut while composing", () => {
+  assert.equal(isSaveShortcut({ key: "s", metaKey: true, isComposing: true }), false);
+});
+
+test("ignores Alt+S for saving", () => {
+  assert.equal(isSaveShortcut({ key: "s", altKey: true }), false);
 });
 
 test("matches Escape for cancelling search", () => {

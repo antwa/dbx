@@ -648,7 +648,7 @@ watch(
         <div v-else-if="sourceError" class="flex flex-1 items-center justify-center px-4 text-sm text-destructive">
           {{ sourceError }}
         </div>
-        <div v-else-if="sourceEditing" class="flex min-h-0 flex-1 flex-col">
+        <div v-else-if="sourceEditing" class="flex min-h-0 flex-1 flex-col" data-object-source-editor>
           <QueryEditor
             v-model="sourceDraft"
             class="min-h-0 flex-1"
@@ -657,7 +657,7 @@ watch(
             :dialect="sourceDialect"
             :format-dialect="sourceFormatDialect"
             force-word-wrap
-            @execute="saveSource"
+            @save="saveSource"
           />
           <div v-if="sourceSaveError" class="shrink-0 border-t px-3 py-2 text-xs text-destructive">
             {{ sourceSaveError }}
@@ -674,6 +674,7 @@ watch(
           :format-dialect="sourceFormatDialect"
           force-word-wrap
           read-only
+          data-object-source-preview
         />
       </div>
     </div>

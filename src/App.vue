@@ -35,7 +35,12 @@ import * as api from "@/lib/api";
 import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
 import { resolveExecutableSql } from "@/lib/sqlExecutionTarget";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
-import { isCloseTabShortcut, isExecuteSqlShortcut, isFocusSearchShortcut } from "@/lib/keyboardShortcuts";
+import {
+  isCloseTabShortcut,
+  isExecuteSqlShortcut,
+  isFocusSearchShortcut,
+  isSaveShortcut,
+} from "@/lib/keyboardShortcuts";
 import { isPreviewTab } from "@/lib/tabPresentation";
 import { supportsSqlFileExecution } from "@/lib/databaseCapabilities";
 import { classifyAiSqlExecution } from "@/lib/aiSqlExecutionPolicy";
@@ -432,14 +437,7 @@ function handleKeydown(e: KeyboardEvent) {
     }
     return;
   }
-  if (
-    activeTab.value?.mode === "query" &&
-    !showSaveSqlDialog.value &&
-    !e.isComposing &&
-    !e.altKey &&
-    (e.metaKey || e.ctrlKey) &&
-    e.key.toLowerCase() === "s"
-  ) {
+  if (activeTab.value?.mode === "query" && !showSaveSqlDialog.value && isSaveShortcut(e)) {
     e.preventDefault();
     e.stopPropagation();
     void openSaveSqlDialog();
@@ -669,6 +667,7 @@ onUnmounted(() => {
                   @editor-selection-change="(v: string) => (selectedSql = v)"
                   @editor-cursor-change="(p: number) => (cursorPos = p)"
                   @format-error="toast(t('toolbar.formatSqlFailed'))"
+                  @save-sql="void openSaveSqlDialog()"
                   @reload="
                     (
                       sql?: string,

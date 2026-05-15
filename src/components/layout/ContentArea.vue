@@ -35,6 +35,7 @@ const emit = defineEmits<{
   "update:activeOutputView": [value: "result" | "explain" | "chart"];
   fixWithAi: [errorMessage: string];
   execute: [sqlOverride?: string];
+  saveSql: [];
   cancel: [];
   explain: [];
   editorUpdate: [value: string];
@@ -194,6 +195,7 @@ defineExpose({ focusSearch });
               @cursor-change="emit('editorCursorChange', $event)"
               @format-error="emit('formatError')"
               @execute="emit('execute')"
+              @save="emit('saveSql')"
               @click-table="onHandleClickTable"
               @click-column="onHandleClickColumn"
               @close-column-panel="onHandleCloseColumnPanel"

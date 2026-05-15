@@ -28,6 +28,7 @@ const emit = defineEmits<{
   cursorChange: [pos: number];
   formatError: [message: string];
   execute: [sql: string];
+  save: [];
   clickTable: [tableName: string];
   clickColumn: [columns: Array<{ name: string; table: string; schema?: string }>, error?: string | undefined];
   closeColumnPanel: [];
@@ -316,6 +317,13 @@ onMounted(async () => {
       key: "Mod-Enter",
       run: () => {
         if (view.value) emit("execute", executableSqlFromView(view.value));
+        return true;
+      },
+    },
+    {
+      key: "Mod-s",
+      run: () => {
+        emit("save");
         return true;
       },
     },
