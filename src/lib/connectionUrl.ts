@@ -69,11 +69,50 @@ function profileForScheme(scheme: string, preferredProfile?: string): Connection
   return SCHEME_PROFILES[scheme];
 }
 
+function parseJdbcSqlServerUrl(source: string): ParsedConnectionUrl | null {
+  const match = source.match(/^jdbc:sqlserver:\/\/([^;:/]+)(?::(\d+))?(?:;(.*))?$/i);
+  if (!match) return null;
+
+  const profile = SCHEME_PROFILES.sqlserver;
+  const props = new Map<string, string>();
+  const urlParams: string[] = [];
+  for (const part of (match[3] || "").split(";")) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    const key = rawKey.trim();
+    const value = rest.join("=");
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey === "databasename" || normalizedKey === "database" || normalizedKey === "user") {
+      props.set(normalizedKey, value);
+    } else if (normalizedKey === "password") {
+      props.set(normalizedKey, value);
+    } else {
+      urlParams.push(part);
+    }
+  }
+
+  return {
+    dbType: profile.type,
+    driverProfile: profile.profile,
+    driverLabel: profile.label,
+    host: match[1],
+    port: match[2] ? Number(match[2]) : profile.defaultPort,
+    username: decodeUrlPart(props.get("user") || ""),
+    password: decodeUrlPart(props.get("password") || ""),
+    database: decodeUrlPart(props.get("databasename") || props.get("database") || "") || undefined,
+    urlParams: urlParams.join(";"),
+    ssl: false,
+  };
+}
+
 export function parseConnectionUrl(value: string, preferredProfile?: string): ParsedConnectionUrl {
-  const source = value.trim();
-  if (!source) {
+  const input = value.trim();
+  if (!input) {
     throw new Error("Connection URL is empty");
   }
+  const jdbcSqlServer = parseJdbcSqlServerUrl(input);
+  if (jdbcSqlServer) return jdbcSqlServer;
+  const source = input.replace(/^jdbc:/i, "");
 
   let parsed: URL;
   try {
