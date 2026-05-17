@@ -5,7 +5,15 @@ import { normalizeColumnFormatter, type ColumnFormatterConfig } from "@/lib/colu
 import { normalizeShortcutSettings, type ShortcutSettings } from "@/lib/shortcutRegistry";
 import type { SidebarActivation } from "@/lib/treeNodeClick";
 
-export type AiProvider = "claude" | "openai" | "custom";
+export type AiProvider =
+  | "claude"
+  | "openai"
+  | "gemini"
+  | "deepseek"
+  | "qwen"
+  | "ollama"
+  | "openai-compatible"
+  | "custom";
 export type AiApiStyle = "completions" | "responses";
 
 export interface AiConfig {
@@ -19,21 +27,106 @@ export interface AiConfig {
   enableThinking?: boolean;
 }
 
-const defaultConfigs: Record<AiProvider, Omit<AiConfig, "apiKey">> = {
+export interface AiProviderPreset extends Omit<AiConfig, "apiKey"> {
+  label: string;
+  iconSlug?: string;
+  requiresApiKey: boolean;
+}
+
+export const AI_PROVIDER_PRESETS: Record<AiProvider, AiProviderPreset> = {
   claude: {
+    label: "Claude",
+    iconSlug: "anthropic",
     provider: "claude",
     endpoint: "https://api.anthropic.com/v1/messages",
     model: "claude-sonnet-4-20250514",
     apiStyle: "completions",
+    requiresApiKey: true,
   },
   openai: {
+    label: "OpenAI",
+    iconSlug: "openai",
     provider: "openai",
     endpoint: "https://api.openai.com/v1/chat/completions",
-    model: "gpt-4o",
+    model: "gpt-4o-mini",
     apiStyle: "completions",
+    requiresApiKey: true,
   },
-  custom: { provider: "custom", endpoint: "", model: "", apiStyle: "completions" },
+  gemini: {
+    label: "Gemini",
+    iconSlug: "googlegemini",
+    provider: "gemini",
+    endpoint: "https://generativelanguage.googleapis.com",
+    model: "gemini-1.5-pro",
+    apiStyle: "completions",
+    requiresApiKey: true,
+  },
+  deepseek: {
+    label: "DeepSeek",
+    iconSlug: "deepseek",
+    provider: "deepseek",
+    endpoint: "https://api.deepseek.com/v1",
+    model: "deepseek-v4-flash",
+    apiStyle: "completions",
+    requiresApiKey: true,
+  },
+  qwen: {
+    label: "Qwen",
+    iconSlug: "alibabacloud",
+    provider: "qwen",
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus",
+    apiStyle: "completions",
+    requiresApiKey: true,
+  },
+  ollama: {
+    label: "Ollama",
+    iconSlug: "ollama",
+    provider: "ollama",
+    endpoint: "http://localhost:11434/v1",
+    model: "llama3.1",
+    apiStyle: "completions",
+    requiresApiKey: false,
+  },
+  "openai-compatible": {
+    label: "OpenAI Compatible",
+    iconSlug: "openai",
+    provider: "openai-compatible",
+    endpoint: "",
+    model: "",
+    apiStyle: "completions",
+    requiresApiKey: true,
+  },
+  custom: {
+    label: "Custom",
+    provider: "custom",
+    endpoint: "",
+    model: "",
+    apiStyle: "completions",
+    requiresApiKey: true,
+  },
 };
+
+const defaultConfigs: Record<AiProvider, Omit<AiConfig, "apiKey">> = Object.fromEntries(
+  Object.entries(AI_PROVIDER_PRESETS).map(([provider, preset]) => {
+    const { label: _label, iconSlug: _iconSlug, requiresApiKey: _requiresApiKey, ...config } = preset;
+    return [provider, config];
+  }),
+) as Record<AiProvider, Omit<AiConfig, "apiKey">>;
+
+export function normalizeAiConfig(config: Partial<AiConfig> | null | undefined): AiConfig {
+  const provider = config?.provider && config.provider in AI_PROVIDER_PRESETS ? config.provider : "claude";
+  return {
+    ...defaultConfigs[provider],
+    apiKey: config?.apiKey ?? "",
+    ...config,
+    provider,
+    apiStyle: config?.apiStyle ?? defaultConfigs[provider].apiStyle,
+    proxyEnabled: !!config?.proxyEnabled,
+    proxyUrl: config?.proxyUrl ?? "",
+    enableThinking: config?.enableThinking ?? true,
+  };
+}
 
 export type EditorTheme =
   | "one-dark"
@@ -167,7 +260,7 @@ function saveEditorSettings(settings: EditorSettings) {
 }
 
 export const useSettingsStore = defineStore("settings", () => {
-  const aiConfig = ref<AiConfig>({ ...defaultConfigs.claude, apiKey: "", apiStyle: "completions" });
+  const aiConfig = ref<AiConfig>(normalizeAiConfig({ provider: "claude" }));
   const isAiConfigLoaded = ref(false);
 
   const editorSettings = ref<EditorSettings>(loadEditorSettings());
@@ -177,9 +270,9 @@ export const useSettingsStore = defineStore("settings", () => {
     const legacy = localStorage.getItem("dbx-ai-config");
     const saved = await api.loadAiConfig().catch(() => null);
     if (saved) {
-      aiConfig.value = saved;
+      aiConfig.value = normalizeAiConfig(saved);
     } else if (legacy) {
-      aiConfig.value = JSON.parse(legacy);
+      aiConfig.value = normalizeAiConfig(JSON.parse(legacy));
       await api.saveAiConfig(aiConfig.value).catch(() => {});
       localStorage.removeItem("dbx-ai-config");
     }
@@ -196,7 +289,8 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   function isConfigured(): boolean {
-    return !!aiConfig.value.apiKey && !!aiConfig.value.endpoint;
+    const preset = AI_PROVIDER_PRESETS[aiConfig.value.provider];
+    return !!aiConfig.value.endpoint && !!aiConfig.value.model && (!preset.requiresApiKey || !!aiConfig.value.apiKey);
   }
 
   function updateEditorSettings(partial: Partial<EditorSettings>) {

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_EDITOR_SETTINGS, normalizeEditorSettings } from "../src/stores/settingsStore.ts";
+import {
+  AI_PROVIDER_PRESETS,
+  DEFAULT_EDITOR_SETTINGS,
+  normalizeAiConfig,
+  normalizeEditorSettings,
+} from "../src/stores/settingsStore.ts";
 
 test("defaults Redis scan page size to 1000 keys", () => {
   assert.equal(DEFAULT_EDITOR_SETTINGS.redisScanPageSize, 1000);
@@ -57,4 +62,34 @@ test("keeps only valid saved column formatter configs", () => {
     "conn::db::public::users::name": { kind: "mask", prefix: 2, suffix: 2 },
     "conn::db::public::users::payload": { kind: "json-path", path: "$.user.name" },
   });
+});
+
+test("AI provider presets include common hosted and local providers", () => {
+  assert.equal(AI_PROVIDER_PRESETS.gemini.endpoint, "https://generativelanguage.googleapis.com");
+  assert.equal(AI_PROVIDER_PRESETS.gemini.model, "gemini-1.5-pro");
+  assert.equal(AI_PROVIDER_PRESETS.deepseek.endpoint, "https://api.deepseek.com/v1");
+  assert.equal(AI_PROVIDER_PRESETS.deepseek.model, "deepseek-v4-flash");
+  assert.equal(AI_PROVIDER_PRESETS.qwen.endpoint, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+  assert.equal(AI_PROVIDER_PRESETS.ollama.endpoint, "http://localhost:11434/v1");
+  assert.equal(AI_PROVIDER_PRESETS.ollama.requiresApiKey, false);
+  assert.equal(AI_PROVIDER_PRESETS.openai.iconSlug, "openai");
+  assert.equal(AI_PROVIDER_PRESETS.deepseek.iconSlug, "deepseek");
+});
+
+test("normalizes legacy AI config and fills provider defaults", () => {
+  const legacy = normalizeAiConfig({
+    provider: "openai",
+    apiKey: "key",
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-4o",
+  } as any);
+
+  assert.equal(legacy.apiStyle, "completions");
+  assert.equal(legacy.provider, "openai");
+  assert.equal(legacy.apiKey, "key");
+
+  const ollama = normalizeAiConfig({ provider: "ollama" } as any);
+  assert.equal(ollama.endpoint, "http://localhost:11434/v1");
+  assert.equal(ollama.model, "llama3.1");
+  assert.equal(ollama.apiKey, "");
 });

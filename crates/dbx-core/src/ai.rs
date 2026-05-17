@@ -39,8 +39,15 @@ pub async fn unregister_stream(session_id: &str) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AiProvider {
+    #[serde(alias = "anthropic")]
     Claude,
     Openai,
+    Gemini,
+    Deepseek,
+    Qwen,
+    Ollama,
+    #[serde(rename = "openai-compatible")]
+    OpenaiCompatible,
     Custom,
 }
 
@@ -134,18 +141,40 @@ pub struct AiConversation {
 
 pub fn resolve_endpoint(config: &AiConfig) -> String {
     let ep = config.endpoint.trim().trim_end_matches('/');
+    if matches!(config.provider, AiProvider::Gemini) {
+        if ep.ends_with(":generateContent") || ep.ends_with(":streamGenerateContent") {
+            return ep.to_string();
+        }
+        let base = ep.trim_end_matches("/v1beta");
+        return format!("{base}/v1beta/models/{}:generateContent", config.model);
+    }
     if ep.ends_with("/chat/completions") || ep.ends_with("/responses") || ep.ends_with("/messages") {
         return ep.to_string();
     }
     match config.provider {
         AiProvider::Claude => format!("{ep}/messages"),
-        AiProvider::Openai | AiProvider::Custom => {
+        AiProvider::Openai
+        | AiProvider::Deepseek
+        | AiProvider::Qwen
+        | AiProvider::Ollama
+        | AiProvider::OpenaiCompatible
+        | AiProvider::Custom => {
             if config.api_style == AiApiStyle::Responses {
                 format!("{ep}/responses")
             } else {
                 format!("{ep}/chat/completions")
             }
         }
+        AiProvider::Gemini => unreachable!(),
+    }
+}
+
+fn resolve_gemini_stream_endpoint(config: &AiConfig) -> String {
+    let endpoint = resolve_endpoint(config);
+    if endpoint.ends_with(":streamGenerateContent") {
+        endpoint
+    } else {
+        endpoint.replace(":generateContent", ":streamGenerateContent")
     }
 }
 
@@ -189,6 +218,14 @@ pub fn responses_stream_text(event: &serde_json::Value) -> Option<&str> {
     event["delta"].as_str().filter(|s| !s.is_empty())
 }
 
+pub fn gemini_text(data: &serde_json::Value) -> String {
+    data["candidates"]
+        .get(0)
+        .and_then(|candidate| candidate["content"]["parts"].as_array())
+        .map(|parts| parts.iter().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join(""))
+        .unwrap_or_default()
+}
+
 pub fn extract_error(data: &serde_json::Value) -> Option<String> {
     data["error"]["message"].as_str().or_else(|| data["error"].as_str()).map(ToString::to_string)
 }
@@ -215,7 +252,7 @@ pub fn build_responses_input(system_prompt: &str, messages: &[AiMessage]) -> ser
 // ---------------------------------------------------------------------------
 
 fn validate_config(config: &AiConfig) -> Result<(), String> {
-    if config.api_key.trim().is_empty() {
+    if !matches!(config.provider, AiProvider::Ollama) && config.api_key.trim().is_empty() {
         return Err("API key is required".to_string());
     }
     if config.endpoint.trim().is_empty() {
@@ -225,6 +262,18 @@ fn validate_config(config: &AiConfig) -> Result<(), String> {
         return Err("Model is required".to_string());
     }
     Ok(())
+}
+
+fn maybe_bearer_headers(config: &AiConfig) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if !config.api_key.trim().is_empty() {
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", config.api_key)).map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(headers)
 }
 
 pub fn build_ai_http_client(config: &AiConfig, timeout_secs: u64) -> Result<reqwest::Client, String> {
@@ -276,12 +325,7 @@ pub async fn call_claude(client: &reqwest::Client, request: AiCompletionRequest)
 }
 
 pub async fn call_openai_compatible(client: &reqwest::Client, request: AiCompletionRequest) -> Result<String, String> {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", request.config.api_key)).map_err(|e| e.to_string())?,
-    );
+    let headers = maybe_bearer_headers(&request.config)?;
 
     let mut messages = vec![json!({ "role": "system", "content": request.system_prompt })];
     messages.extend(request.messages.iter().map(|message| json!({ "role": message.role, "content": message.content })));
@@ -316,12 +360,7 @@ pub async fn call_openai_compatible(client: &reqwest::Client, request: AiComplet
 }
 
 pub async fn call_responses_api(client: &reqwest::Client, request: AiCompletionRequest) -> Result<String, String> {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", request.config.api_key)).map_err(|e| e.to_string())?,
-    );
+    let headers = maybe_bearer_headers(&request.config)?;
 
     let body = json!({
         "model": request.config.model,
@@ -355,6 +394,45 @@ pub async fn call_responses_api(client: &reqwest::Client, request: AiCompletionR
         .to_string())
 }
 
+pub async fn call_gemini(client: &reqwest::Client, request: AiCompletionRequest) -> Result<String, String> {
+    let mut contents = Vec::new();
+    for message in &request.messages {
+        let role = if message.role == "assistant" { "model" } else { "user" };
+        contents.push(json!({
+            "role": role,
+            "parts": [{ "text": message.content }],
+        }));
+    }
+
+    let body = json!({
+        "systemInstruction": {
+            "parts": [{ "text": request.system_prompt }],
+        },
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": request.max_tokens.unwrap_or(2048),
+            "temperature": request.temperature.unwrap_or(0.2),
+        },
+    });
+
+    let res = client
+        .post(&resolve_endpoint(&request.config))
+        .query(&[("key", request.config.api_key.as_str())])
+        .header(CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {e}"))?;
+
+    let status = res.status();
+    let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(extract_error(&data).unwrap_or_else(|| format!("Gemini API error: {status}")));
+    }
+
+    Ok(gemini_text(&data))
+}
+
 // ---------------------------------------------------------------------------
 // High-level: test_connection_core / complete
 // ---------------------------------------------------------------------------
@@ -374,7 +452,13 @@ pub async fn test_connection_core(config: &AiConfig) -> Result<String, String> {
 
     match request.config.provider {
         AiProvider::Claude => call_claude(&client, request).await,
-        AiProvider::Openai | AiProvider::Custom => {
+        AiProvider::Gemini => call_gemini(&client, request).await,
+        AiProvider::Openai
+        | AiProvider::Deepseek
+        | AiProvider::Qwen
+        | AiProvider::Ollama
+        | AiProvider::OpenaiCompatible
+        | AiProvider::Custom => {
             if request.config.api_style == AiApiStyle::Responses {
                 call_responses_api(&client, request).await
             } else {
@@ -392,7 +476,13 @@ pub async fn complete(request: &AiCompletionRequest) -> Result<String, String> {
 
     match request.config.provider {
         AiProvider::Claude => call_claude(&client, request.clone()).await,
-        AiProvider::Openai | AiProvider::Custom => {
+        AiProvider::Gemini => call_gemini(&client, request.clone()).await,
+        AiProvider::Openai
+        | AiProvider::Deepseek
+        | AiProvider::Qwen
+        | AiProvider::Ollama
+        | AiProvider::OpenaiCompatible
+        | AiProvider::Custom => {
             if request.config.api_style == AiApiStyle::Responses {
                 call_responses_api(&client, request.clone()).await
             } else {
@@ -418,7 +508,13 @@ pub async fn stream(
 
     match request.config.provider {
         AiProvider::Claude => stream_claude(&client, session_id, request, cancelled, &on_chunk).await,
-        AiProvider::Openai | AiProvider::Custom => {
+        AiProvider::Gemini => stream_gemini(&client, session_id, request, cancelled, &on_chunk).await,
+        AiProvider::Openai
+        | AiProvider::Deepseek
+        | AiProvider::Qwen
+        | AiProvider::Ollama
+        | AiProvider::OpenaiCompatible
+        | AiProvider::Custom => {
             if request.config.api_style == AiApiStyle::Responses {
                 stream_responses_api(&client, session_id, request, cancelled, &on_chunk).await
             } else {
@@ -518,12 +614,7 @@ async fn stream_openai(
     cancelled: &Notify,
     on_chunk: &impl Fn(AiStreamChunk),
 ) -> Result<(), String> {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", request.config.api_key)).map_err(|e| e.to_string())?,
-    );
+    let headers = maybe_bearer_headers(&request.config)?;
 
     let mut messages = vec![json!({ "role": "system", "content": request.system_prompt })];
     messages.extend(request.messages.iter().map(|m| json!({ "role": m.role, "content": m.content })));
@@ -618,12 +709,7 @@ async fn stream_responses_api(
     cancelled: &Notify,
     on_chunk: &impl Fn(AiStreamChunk),
 ) -> Result<(), String> {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", request.config.api_key)).map_err(|e| e.to_string())?,
-    );
+    let headers = maybe_bearer_headers(&request.config)?;
 
     let body = json!({
         "model": request.config.model,
@@ -695,6 +781,89 @@ async fn stream_responses_api(
     Ok(())
 }
 
+async fn stream_gemini(
+    client: &reqwest::Client,
+    session_id: &str,
+    request: &AiCompletionRequest,
+    cancelled: &Notify,
+    on_chunk: &impl Fn(AiStreamChunk),
+) -> Result<(), String> {
+    let mut contents = Vec::new();
+    for message in &request.messages {
+        let role = if message.role == "assistant" { "model" } else { "user" };
+        contents.push(json!({
+            "role": role,
+            "parts": [{ "text": message.content }],
+        }));
+    }
+
+    let body = json!({
+        "systemInstruction": {
+            "parts": [{ "text": request.system_prompt }],
+        },
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": request.max_tokens.unwrap_or(2048),
+            "temperature": request.temperature.unwrap_or(0.2),
+        },
+    });
+
+    let res = client
+        .post(&resolve_gemini_stream_endpoint(&request.config))
+        .query(&[("key", request.config.api_key.as_str()), ("alt", "sse")])
+        .header(CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {e}"))?;
+
+    if !res.status().is_success() {
+        let data: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+        return Err(extract_error(&data).unwrap_or_else(|| "Gemini API error".to_string()));
+    }
+
+    let mut byte_stream = res.bytes_stream();
+    let mut buf = String::new();
+
+    loop {
+        tokio::select! {
+            chunk = byte_stream.next() => {
+                let Some(chunk) = chunk else { break };
+                let chunk = chunk.map_err(|e| e.to_string())?;
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].to_string();
+                    buf = buf[pos + 1..].to_string();
+
+                    let Some(data) = stream_data_payload(&line) else { continue };
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                        let text = gemini_text(&event);
+                        if !text.is_empty() {
+                            on_chunk(AiStreamChunk {
+                                session_id: session_id.to_string(),
+                                delta: text,
+                                reasoning_delta: None,
+                                done: false,
+                            });
+                        }
+                    }
+                }
+            }
+            _ = cancelled.notified() => { break; }
+        }
+    }
+
+    on_chunk(AiStreamChunk {
+        session_id: session_id.to_string(),
+        delta: String::new(),
+        reasoning_delta: None,
+        done: true,
+    });
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Conversation persistence (path-based)
 // ---------------------------------------------------------------------------
@@ -749,7 +918,9 @@ pub fn load_config(path: &Path) -> Result<Option<AiConfig>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_ai_http_client, AiApiStyle, AiConfig, AiProvider};
+    use super::{
+        build_ai_http_client, gemini_text, resolve_endpoint, validate_config, AiApiStyle, AiConfig, AiProvider,
+    };
 
     #[test]
     fn ai_config_proxy_fields_default_for_legacy_config() {
@@ -783,5 +954,64 @@ mod tests {
         let err = build_ai_http_client(&config, 1).unwrap_err();
 
         assert!(err.contains("Invalid AI proxy URL"));
+    }
+
+    #[test]
+    fn resolves_gemini_and_ollama_endpoints() {
+        let gemini = AiConfig {
+            provider: AiProvider::Gemini,
+            api_key: "key".to_string(),
+            endpoint: "https://generativelanguage.googleapis.com".to_string(),
+            model: "gemini-1.5-pro".to_string(),
+            api_style: AiApiStyle::Completions,
+            proxy_enabled: false,
+            proxy_url: String::new(),
+            enable_thinking: true,
+        };
+
+        assert_eq!(
+            resolve_endpoint(&gemini),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent"
+        );
+
+        let ollama = AiConfig {
+            provider: AiProvider::Ollama,
+            api_key: String::new(),
+            endpoint: "http://localhost:11434/v1".to_string(),
+            model: "llama3.1".to_string(),
+            api_style: AiApiStyle::Completions,
+            proxy_enabled: false,
+            proxy_url: String::new(),
+            enable_thinking: true,
+        };
+
+        assert_eq!(resolve_endpoint(&ollama), "http://localhost:11434/v1/chat/completions");
+        assert!(validate_config(&ollama).is_ok());
+    }
+
+    #[test]
+    fn parses_gemini_text_and_provider_aliases() {
+        let data = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "text": "SELECT " },
+                        { "text": "1;" }
+                    ]
+                }
+            }]
+        });
+
+        assert_eq!(gemini_text(&data), "SELECT 1;");
+
+        let claude: AiConfig = serde_json::from_value(serde_json::json!({
+            "provider": "anthropic",
+            "apiKey": "key",
+            "endpoint": "https://api.anthropic.com/v1/messages",
+            "model": "claude-sonnet-4-20250514"
+        }))
+        .unwrap();
+
+        assert!(matches!(claude.provider, AiProvider::Claude));
     }
 }

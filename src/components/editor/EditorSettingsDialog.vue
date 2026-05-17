@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
   useSettingsStore,
+  AI_PROVIDER_PRESETS,
   EDITOR_THEMES,
   FONT_FAMILIES,
   DEFAULT_EDITOR_SETTINGS,
@@ -30,6 +31,7 @@ import {
   normalizeShortcutSettings,
   type ShortcutActionId,
 } from "@/lib/shortcutRegistry";
+import AiProviderLogo from "@/components/icons/AiProviderLogo.vue";
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
@@ -259,11 +261,8 @@ async function changePassword() {
 }
 
 // ---------- AI Settings ----------
-const aiProviderDefaults: Record<AiProvider, { endpoint: string; model: string }> = {
-  claude: { endpoint: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514" },
-  openai: { endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4o" },
-  custom: { endpoint: "", model: "" },
-};
+const aiProviderOptions = Object.values(AI_PROVIDER_PRESETS);
+const selectedAiProviderPreset = computed(() => AI_PROVIDER_PRESETS[aiEditProvider.value]);
 
 const aiEditProvider = ref<AiProvider>(settingsStore.aiConfig.provider);
 const aiEditApiKey = ref(settingsStore.aiConfig.apiKey);
@@ -279,6 +278,13 @@ const aiCompletionsMode = computed(() => aiEditApiStyle.value === "completions")
 const aiTesting = ref(false);
 const aiTestResult = ref<"" | "success" | "error">("");
 const aiTestError = ref("");
+const aiRequiresApiKey = computed(() => AI_PROVIDER_PRESETS[aiEditProvider.value].requiresApiKey);
+const aiSupportsApiStyle = computed(
+  () =>
+    aiEditProvider.value === "openai" ||
+    aiEditProvider.value === "openai-compatible" ||
+    aiEditProvider.value === "custom",
+);
 
 function syncAiEditState() {
   aiEditProvider.value = settingsStore.aiConfig.provider;
@@ -295,8 +301,10 @@ function syncAiEditState() {
 
 function aiSelectProvider(provider: AiProvider) {
   aiEditProvider.value = provider;
-  aiEditEndpoint.value = aiProviderDefaults[provider].endpoint;
-  aiEditModel.value = aiProviderDefaults[provider].model;
+  aiEditEndpoint.value = AI_PROVIDER_PRESETS[provider].endpoint;
+  aiEditModel.value = AI_PROVIDER_PRESETS[provider].model;
+  aiEditApiStyle.value = AI_PROVIDER_PRESETS[provider].apiStyle;
+  if (!AI_PROVIDER_PRESETS[provider].requiresApiKey) aiEditApiKey.value = "";
 }
 
 function aiHasChanges(): boolean {
@@ -339,6 +347,7 @@ async function aiTestConn() {
       apiStyle: aiEditApiStyle.value,
       proxyEnabled: aiEditProxyEnabled.value,
       proxyUrl: aiEditProxyUrl.value,
+      enableThinking: aiEditEnableThinking.value,
     });
     aiTestResult.value = "success";
   } catch (e: any) {
@@ -478,12 +487,13 @@ watch(
                   <SelectTrigger>
                     <SelectValue :placeholder="t('settings.selectFont')" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent position="popper" class="min-w-[210px]">
                     <SelectItem
                       v-for="font in FONT_FAMILIES"
                       :key="font.value"
                       :value="font.value"
                       :style="{ fontFamily: font.value }"
+                      class="whitespace-nowrap"
                     >
                       {{ font.label }}
                     </SelectItem>
@@ -775,18 +785,46 @@ watch(
               <div class="grid grid-cols-3 items-center gap-3">
                 <Label class="text-right text-xs">{{ t("ai.provider") }}</Label>
                 <Select :model-value="aiEditProvider" @update:model-value="(v: any) => aiSelectProvider(v)">
-                  <SelectTrigger class="col-span-2 h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger class="col-span-2 h-8 text-xs">
+                    <SelectValue>
+                      <span class="flex items-center gap-2">
+                        <AiProviderLogo
+                          :provider="selectedAiProviderPreset.provider"
+                          :label="selectedAiProviderPreset.label"
+                          :icon-slug="selectedAiProviderPreset.iconSlug"
+                        />
+                        <span>{{ selectedAiProviderPreset.label }}</span>
+                      </span>
+                    </SelectValue>
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="claude">Claude</SelectItem>
-                    <SelectItem value="openai">OpenAI</SelectItem>
-                    <SelectItem value="custom">Custom</SelectItem>
+                    <SelectItem
+                      v-for="provider in aiProviderOptions"
+                      :key="provider.provider"
+                      :value="provider.provider"
+                    >
+                      <span class="flex items-center gap-2">
+                        <AiProviderLogo
+                          :provider="provider.provider"
+                          :label="provider.label"
+                          :icon-slug="provider.iconSlug"
+                        />
+                        <span>{{ provider.label }}</span>
+                      </span>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div class="grid grid-cols-3 items-center gap-3">
                 <Label class="text-right text-xs">API Key</Label>
-                <Input v-model="aiEditApiKey" type="password" autocomplete="off" class="col-span-2 h-8 text-xs" />
+                <Input
+                  v-model="aiEditApiKey"
+                  type="password"
+                  autocomplete="off"
+                  class="col-span-2 h-8 text-xs"
+                  :placeholder="aiRequiresApiKey ? '' : 'Optional'"
+                />
               </div>
 
               <div class="grid grid-cols-3 items-center gap-3">
@@ -804,7 +842,7 @@ watch(
                 <Input v-model="aiEditModel" autocomplete="off" class="col-span-2 h-8 text-xs" />
               </div>
 
-              <div v-if="aiEditProvider !== 'claude'" class="grid grid-cols-3 items-center gap-3">
+              <div v-if="aiSupportsApiStyle" class="grid grid-cols-3 items-center gap-3">
                 <Label class="text-right text-xs">API</Label>
                 <div class="col-span-2 flex gap-2">
                   <Button
@@ -834,7 +872,7 @@ watch(
                       v-model="aiEditEnableThinking"
                       type="checkbox"
                       class="h-4 w-4 shrink-0 accent-primary"
-                      :disabled="!aiCompletionsMode"
+                      :disabled="!aiCompletionsMode || aiEditProvider === 'gemini'"
                     />
                     {{ aiEditEnableThinking ? t("ai.enableThinkingOn") : t("ai.enableThinkingOff") }}
                   </label>
@@ -869,12 +907,17 @@ watch(
               </div>
             </div>
 
-            <DialogFooter class="mt-auto flex items-center gap-2">
-              <div class="flex-1 flex items-center gap-2">
+            <DialogFooter class="mt-auto border-t-0 bg-transparent gap-3 sm:gap-3">
+              <div class="flex flex-1 items-center gap-2">
                 <Button
                   size="sm"
                   variant="outline"
-                  :disabled="aiTesting || !aiEditApiKey?.trim() || !aiEditEndpoint?.trim() || !aiEditModel?.trim()"
+                  :disabled="
+                    aiTesting ||
+                    (aiRequiresApiKey && !aiEditApiKey?.trim()) ||
+                    !aiEditEndpoint?.trim() ||
+                    !aiEditModel?.trim()
+                  "
                   @click="aiTestConn"
                 >
                   <Loader2 v-if="aiTesting" class="h-3 w-3 animate-spin mr-1" />
