@@ -61,7 +61,14 @@ test("comments and multi-statement writes do not bypass policy", () => {
 
 test("AI auto-execution only attempts action-oriented generate requests", () => {
   assert.equal(shouldAttemptAiAutoExecute("查一下用户数量", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("帮我查ihli的平均值", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("看下 ihli 平均是多少", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("求 ihli 的最大值", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("计算 ihli 总数", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("显示最近 10 条订单", "generate"), true);
+  assert.equal(shouldAttemptAiAutoExecute("获取用户数量", "generate"), true);
   assert.equal(shouldAttemptAiAutoExecute("show me recent orders", "generate"), true);
   assert.equal(shouldAttemptAiAutoExecute("只生成 SQL，不要执行", "generate"), false);
+  assert.equal(shouldAttemptAiAutoExecute("先别跑，帮我查一下用户数量", "generate"), false);
   assert.equal(shouldAttemptAiAutoExecute("优化这条 SQL", "optimize"), false);
 });

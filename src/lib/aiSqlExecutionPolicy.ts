@@ -24,9 +24,9 @@ const NON_PRODUCTION_RE =
   /\b(local|localhost|dev|develop|development|test|testing|stage|staging|sandbox|demo)\b|本地|开发|测试|预发/i;
 const LOCAL_HOST_RE = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
 const NEGATIVE_EXECUTION_RE =
-  /(不要|别|不用|禁止|只生成|仅生成|只写|仅写).{0,12}(执行|运行)|do\s+not\s+execute|don't\s+execute|dont\s+execute|without\s+executing|only\s+(generate|write|return)/i;
+  /(不要|别|不用|禁止|只生成|仅生成|只写|仅写).{0,12}(执行|运行|跑)|do\s+not\s+execute|don't\s+execute|dont\s+execute|without\s+executing|only\s+(generate|write|return)/i;
 const ACTION_INTENT_RE =
-  /(查一下|查询|查看|看一下|统计|列出|执行|运行|跑一下|show|list|query|find|count|get|fetch|execute|run)/i;
+  /(帮我查|帮忙查|请查|查一下|查询|查看|看一下|看下|统计|计算|算|求|平均|最大|最小|总数|数量|列出|显示|获取|执行|运行|跑一下|show|list|query|find|count|get|fetch|execute|run)/i;
 
 export function stripAiSqlComments(sql: string): string {
   return sql
