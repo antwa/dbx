@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "../../apps/desktop/src/lib/treeNodeClick.ts";
+import {
+  objectSourceKindForTreeNode,
+  sidebarSelectionCopyAction,
+  treeNodeRowAction,
+  treeNodeRowDoubleClickAction,
+} from "../../apps/desktop/src/lib/treeNodeClick.ts";
 
 test("table and view rows open data without toggling structure groups", () => {
   assert.equal(treeNodeRowAction("table", true), "open-data");
@@ -42,6 +47,13 @@ test("leaf data browser nodes keep their open behavior through toggle handler", 
 test("plain metadata leaf rows do nothing on row clicks", () => {
   assert.equal(treeNodeRowAction("column", false), "none");
   assert.equal(treeNodeRowAction("index", false), "none");
+});
+
+test("maps source-capable sidebar nodes to object source kinds", () => {
+  assert.equal(objectSourceKindForTreeNode("view"), "VIEW");
+  assert.equal(objectSourceKindForTreeNode("procedure"), "PROCEDURE");
+  assert.equal(objectSourceKindForTreeNode("function"), "FUNCTION");
+  assert.equal(objectSourceKindForTreeNode("table"), null);
 });
 
 test("database and schema rows open object browser only on double click", () => {

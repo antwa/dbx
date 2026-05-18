@@ -1,4 +1,4 @@
-import type { TreeNodeType } from "@/types/database";
+import type { ObjectSourceKind, TreeNodeType } from "@/types/database";
 import { matchesShortcut, type ShortcutLikeEvent } from "@/lib/keyboardShortcuts";
 
 export type TreeNodeRowAction = "open-data" | "toggle" | "none";
@@ -17,6 +17,13 @@ const dataNodeTypes = new Set<TreeNodeType>(["table", "view"]);
 const toggleLeafNodeTypes = new Set<TreeNodeType>(["redis-db", "mongo-collection"]);
 const objectBrowserNodeTypes = new Set<TreeNodeType>(["database", "schema", "object-browser"]);
 const sourceNodeTypes = new Set<TreeNodeType>(["procedure", "function"]);
+
+export function objectSourceKindForTreeNode(type: TreeNodeType): ObjectSourceKind | null {
+  if (type === "view") return "VIEW";
+  if (type === "procedure") return "PROCEDURE";
+  if (type === "function") return "FUNCTION";
+  return null;
+}
 
 export function treeNodeRowAction(
   type: TreeNodeType,

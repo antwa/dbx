@@ -86,7 +86,12 @@ import {
   usesTreeSchemaMode,
   usesFetchFirst,
 } from "@/lib/databaseCapabilities";
-import { sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "@/lib/treeNodeClick";
+import {
+  objectSourceKindForTreeNode,
+  sidebarSelectionCopyAction,
+  treeNodeRowAction,
+  treeNodeRowDoubleClickAction,
+} from "@/lib/treeNodeClick";
 import { formatCsv, formatJson, formatSqlInsert } from "@/lib/exportFormats";
 import { fetchTableDataForExport } from "@/lib/tableDataExport";
 import { buildCreateDatabaseSql, supportsCreateDatabaseCharset } from "@/lib/createDatabaseSql";
@@ -632,7 +637,8 @@ function buildDropObjectSql(): string {
 function viewObjectSource() {
   const node = props.node;
   if (!node.connectionId || !node.database) return;
-  const objectType = node.type === "procedure" ? "PROCEDURE" : "FUNCTION";
+  const objectType = objectSourceKindForTreeNode(node.type);
+  if (!objectType) return;
   const schema = node.schema || node.database;
   connectionStore
     .ensureConnected(node.connectionId)
@@ -646,7 +652,7 @@ function viewObjectSource() {
       queryStore.setObjectSource(tabId, {
         schema,
         name: node.label,
-        objectType: objectType as "PROCEDURE" | "FUNCTION",
+        objectType,
       });
     })
     .catch((e: any) => {
@@ -1818,6 +1824,9 @@ const isDragging = computed(() => dragState.active && dragState.draggedId === pr
       <template v-if="node.type === 'table' || node.type === 'view'">
         <ContextMenuItem @click="openData">
           <TableProperties class="w-4 h-4" /> {{ t("contextMenu.viewData") }}
+        </ContextMenuItem>
+        <ContextMenuItem v-if="node.type === 'view'" @click="viewObjectSource">
+          <Code2 class="w-4 h-4" /> {{ t("contextMenu.viewSource") }}
         </ContextMenuItem>
         <ContextMenuItem v-if="canOpenStructureEditor" @click="openStructureEditor">
           <PencilRuler class="w-4 h-4" /> {{ t("contextMenu.editStructure") }}
