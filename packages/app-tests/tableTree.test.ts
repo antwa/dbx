@@ -2,17 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  buildGroupedObjectTreeNodes,
   buildTableTreeNodes,
   expandCachedObjectBrowserNodes,
   objectGroupRefreshParentId,
 } from "../../apps/desktop/src/lib/tableTree.ts";
-import type { TableInfo } from "../../apps/desktop/src/types/database.ts";
+import type { ObjectInfo, TableInfo } from "../../apps/desktop/src/types/database.ts";
 
 const treeItemSource = readFileSync("apps/desktop/src/components/sidebar/TreeItem.vue", "utf8");
 const connectionStoreSource = readFileSync("apps/desktop/src/stores/connectionStore.ts", "utf8");
 
 function table(name: string, tableType: "TABLE" | "VIEW" = "TABLE"): TableInfo {
   return { name, table_type: tableType };
+}
+
+function obj(name: string, objectType = "TABLE", schema = "public"): ObjectInfo {
+  return {
+    name,
+    object_type: objectType,
+    schema,
+  };
 }
 
 test("keeps every table as a sidebar node instead of truncating to object browser", () => {
@@ -66,6 +75,36 @@ test("normalizes padded table names from database drivers", () => {
       ["conn:db:public:users", "users"],
       ["conn:db:public:orders", "orders"],
     ],
+  );
+});
+
+test("object tree groups count unique objects when metadata returns duplicates", () => {
+  const nodes = buildGroupedObjectTreeNodes({
+    nodeId: "conn:app:public",
+    connectionId: "conn",
+    database: "app",
+    schema: "public",
+    objects: [
+      obj("orders"),
+      obj("orders"),
+      obj("customers"),
+      obj("active_orders", "VIEW"),
+      obj("active_orders", "VIEW"),
+    ],
+  });
+
+  const tableGroup = nodes.find((node) => node.type === "group-tables");
+  assert.equal(tableGroup?.objectCount, 2);
+  assert.deepEqual(
+    tableGroup?.children?.map((child) => child.label),
+    ["orders", "customers"],
+  );
+
+  const viewGroup = nodes.find((node) => node.type === "group-views");
+  assert.equal(viewGroup?.objectCount, 1);
+  assert.deepEqual(
+    viewGroup?.children?.map((child) => child.label),
+    ["active_orders"],
   );
 });
 

@@ -1,7 +1,7 @@
 export const SCHEMA_TREE_CACHE_TTL_MS = 15 * 60 * 1000;
 
 export interface SchemaTreeCacheEnvelope<T> {
-  version: 1;
+  version: 2;
   cachedAt: string;
   children: T;
 }
@@ -13,7 +13,7 @@ export interface DecodedSchemaTreeCache<T> {
 
 export function encodeSchemaTreeCache<T>(children: T, nowMs = Date.now()): SchemaTreeCacheEnvelope<T> {
   return {
-    version: 1,
+    version: 2,
     cachedAt: new Date(nowMs).toISOString(),
     children,
   };
@@ -31,7 +31,7 @@ export function decodeSchemaTreeCache<T>(
   if (!payload || typeof payload !== "object") return null;
 
   const envelope = payload as Partial<SchemaTreeCacheEnvelope<unknown>>;
-  if (envelope.version !== 1 || !Array.isArray(envelope.children) || typeof envelope.cachedAt !== "string") {
+  if (envelope.version !== 2 || !Array.isArray(envelope.children) || typeof envelope.cachedAt !== "string") {
     return null;
   }
 

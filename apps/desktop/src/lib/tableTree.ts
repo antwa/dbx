@@ -96,10 +96,15 @@ export function buildGroupedObjectTreeNodes({
   objects: ObjectInfo[];
 }): TreeNode[] {
   const buckets = new Map<string, ObjectInfo[]>();
+  const seen = new Set<string>();
   for (const obj of objects) {
     const name = normalizeDatabaseObjectName(obj.name);
     if (!name) continue;
     const t = normalizeObjectType(obj.object_type);
+    const objectSchema = obj.schema ? normalizeDatabaseObjectName(obj.schema) : schema || "";
+    const key = `${t}\0${objectSchema.toLowerCase()}\0${name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const arr = buckets.get(t) ?? [];
     arr.push({ ...obj, name, schema: obj.schema ? normalizeDatabaseObjectName(obj.schema) : obj.schema });
     buckets.set(t, arr);

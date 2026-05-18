@@ -11,7 +11,7 @@ const now = Date.parse("2026-05-17T10:00:00.000Z");
 
 test("wraps tree children with a cache timestamp", () => {
   assert.deepEqual(encodeSchemaTreeCache(children, now), {
-    version: 1,
+    version: 2,
     cachedAt: "2026-05-17T10:00:00.000Z",
     children,
   });
@@ -43,5 +43,6 @@ test("keeps legacy array cache readable but stale", () => {
 });
 
 test("rejects invalid schema tree cache payloads", () => {
-  assert.equal(decodeSchemaTreeCache({ version: 1, cachedAt: "bad", children: "nope" }, now), null);
+  assert.equal(decodeSchemaTreeCache({ version: 2, cachedAt: "bad", children: "nope" }, now), null);
+  assert.equal(decodeSchemaTreeCache({ version: 1, cachedAt: "2026-05-17T10:00:00.000Z", children }, now), null);
 });
