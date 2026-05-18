@@ -47,6 +47,82 @@ final class DbxJdbcPluginTest {
         assertEquals("APP", response.path("result").path("rows").path(0).path(0).asText());
     }
 
+    @Test
+    void listTablesFallsBackWhenCatalogFiltersEverything() throws Exception {
+        request("executeQuery", """
+            {
+              "connection": %s,
+              "sql": "CREATE SCHEMA IF NOT EXISTS app"
+            }
+            """.formatted(CONNECTION));
+        request("executeQuery", """
+            {
+              "connection": %s,
+              "sql": "CREATE TABLE IF NOT EXISTS app.people (id INT PRIMARY KEY, name VARCHAR(30))"
+            }
+            """.formatted(CONNECTION));
+
+        JsonNode response = request("listTables", """
+            {
+              "connection": %s,
+              "database": "UNRELATED_CATALOG",
+              "schema": "APP"
+            }
+            """.formatted(CONNECTION));
+
+        assertFalse(response.has("error"), response.toString());
+        assertEquals("PEOPLE", response.path("result").path(0).path("name").asText());
+    }
+
+    @Test
+    void listObjectsAcceptsCamelCaseMethodAndFallsBackWhenCatalogFiltersEverything() throws Exception {
+        createPeopleTable();
+
+        JsonNode response = request("listObjects", """
+            {
+              "connection": %s,
+              "database": "UNRELATED_CATALOG",
+              "schema": "APP"
+            }
+            """.formatted(CONNECTION));
+
+        assertFalse(response.has("error"), response.toString());
+        assertEquals("PEOPLE", response.path("result").path(0).path("name").asText());
+    }
+
+    @Test
+    void getColumnsFallsBackWhenCatalogFiltersEverything() throws Exception {
+        createPeopleTable();
+
+        JsonNode response = request("getColumns", """
+            {
+              "connection": %s,
+              "database": "UNRELATED_CATALOG",
+              "schema": "APP",
+              "table": "PEOPLE"
+            }
+            """.formatted(CONNECTION));
+
+        assertFalse(response.has("error"), response.toString());
+        assertEquals("ID", response.path("result").path(0).path("name").asText());
+        assertEquals(true, response.path("result").path(0).path("is_primary_key").asBoolean());
+    }
+
+    private static void createPeopleTable() throws Exception {
+        request("executeQuery", """
+            {
+              "connection": %s,
+              "sql": "CREATE SCHEMA IF NOT EXISTS app"
+            }
+            """.formatted(CONNECTION));
+        request("executeQuery", """
+            {
+              "connection": %s,
+              "sql": "CREATE TABLE IF NOT EXISTS app.people (id INT PRIMARY KEY, name VARCHAR(30))"
+            }
+            """.formatted(CONNECTION));
+    }
+
     private static JsonNode request(String method, String params) throws Exception {
         Method handleLine = DbxJdbcPlugin.class.getDeclaredMethod("handleLine", String.class);
         handleLine.setAccessible(true);
