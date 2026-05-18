@@ -1,8 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
 import { FolderOpen, Trash2, Download, RotateCcw, Loader2, RefreshCw, Check, Clock3 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
@@ -17,6 +14,7 @@ import { isTauriRuntime } from "@/lib/tauriRuntime";
 import { countAvailableAgentDriverUpdates } from "@/lib/agentDriverUpdateBadge";
 import type { JdbcDriverInfo, JdbcPluginStatus } from "@/types/database";
 import * as api from "@/lib/api";
+import type { AgentDriverInfo, JavaRuntimeConfig } from "@/lib/api";
 import {
   addDriverInstallQueue,
   driverInstallProgressPercent,
@@ -36,25 +34,6 @@ const emit = defineEmits<{
 
 // ──────────── Agent drivers ────────────
 
-interface AgentDriverInfo {
-  db_type: string;
-  label: string;
-  version: string;
-  size: number;
-  installed: boolean;
-  installed_version: string | null;
-  update_available: boolean;
-  jre: string;
-  jre_installed: boolean;
-}
-
-type JavaRuntimeMode = "managed" | "system" | "custom";
-
-interface JavaRuntimeConfig {
-  mode: JavaRuntimeMode;
-  custom_java_path: string | null;
-}
-
 const drivers = ref<AgentDriverInfo[]>([]);
 const installing = ref<string | null>(null);
 const upgradingAll = ref(false);
@@ -69,7 +48,7 @@ const javaRuntimeConfig = ref<JavaRuntimeConfig>({ mode: "managed", custom_java_
 const customJavaPath = ref("");
 const savingJavaRuntime = ref(false);
 
-let unlisten: UnlistenFn | null = null;
+let unlisten: (() => void) | null = null;
 
 const installedJres = computed(() => {
   const jreMap = new Map<string, boolean>();
@@ -138,13 +117,13 @@ function removeQueuedDriverInstall(dbType: string) {
 }
 
 async function refreshAgents() {
-  updateAgentDrivers(await invoke<AgentDriverInfo[]>("list_installed_agents"));
+  updateAgentDrivers(await api.listInstalledAgents());
 }
 
 async function forceRefresh() {
   refreshing.value = true;
   try {
-    await invoke("invalidate_agent_registry_cache");
+    await api.invalidateAgentRegistryCache();
     await refreshAgents();
   } finally {
     refreshing.value = false;
@@ -152,7 +131,7 @@ async function forceRefresh() {
 }
 
 async function loadJavaRuntimeConfig() {
-  const config = await invoke<JavaRuntimeConfig>("get_agent_java_runtime_config");
+  const config = await api.getAgentJavaRuntimeConfig();
   javaRuntimeConfig.value = config;
   customJavaPath.value = config.custom_java_path ?? "";
 }
@@ -166,11 +145,9 @@ function setJavaRuntimeMode(value: any) {
 async function saveJavaRuntimeConfig() {
   savingJavaRuntime.value = true;
   try {
-    const config = await invoke<JavaRuntimeConfig>("set_agent_java_runtime_config", {
-      config: {
-        mode: javaRuntimeConfig.value.mode,
-        custom_java_path: javaRuntimeConfig.value.mode === "custom" ? customJavaPath.value.trim() || null : null,
-      },
+    const config = await api.setAgentJavaRuntimeConfig({
+      mode: javaRuntimeConfig.value.mode,
+      custom_java_path: javaRuntimeConfig.value.mode === "custom" ? customJavaPath.value.trim() || null : null,
     });
     javaRuntimeConfig.value = config;
     customJavaPath.value = config.custom_java_path ?? "";
@@ -208,7 +185,7 @@ async function runDriverInstall(dbType: string) {
   installing.value = dbType;
   progress.value = null;
   try {
-    await invoke("install_agent", { dbType });
+    await api.installAgent(dbType);
     await refreshAgents();
     toast(`${label} 驱动安装成功`);
   } catch (e: any) {
@@ -235,7 +212,7 @@ async function upgradeAll() {
   queuedDriverInstalls.value = [];
   progress.value = null;
   try {
-    const count = await invoke<number>("upgrade_all_agents");
+    const count = await api.upgradeAllAgents();
     await refreshAgents();
     toast(`${count} 个驱动升级完成`);
   } catch (e: any) {
@@ -252,7 +229,7 @@ async function upgradeAll() {
 async function uninstallDriver(dbType: string) {
   const label = drivers.value.find((d) => d.db_type === dbType)?.label ?? dbType;
   try {
-    await invoke("uninstall_agent", { dbType });
+    await api.uninstallAgent(dbType);
     await refreshAgents();
     toast(`${label} 驱动已卸载`);
   } catch (e: any) {
@@ -264,7 +241,7 @@ async function reinstallJre(jreKey: string) {
   reinstallingJre.value = jreKey;
   progress.value = null;
   try {
-    await invoke("reinstall_jre", { jreKey });
+    await api.reinstallJre(jreKey);
     await refreshAgents();
     toast(`JRE ${jreKey} 重新安装成功`);
   } catch (e: any) {
@@ -277,7 +254,7 @@ async function reinstallJre(jreKey: string) {
 
 async function uninstallJre(jreKey: string) {
   try {
-    await invoke("uninstall_jre", { jreKey });
+    await api.uninstallJre(jreKey);
     await refreshAgents();
     toast(`JRE ${jreKey} 已卸载`);
   } catch (e: any) {
@@ -352,7 +329,7 @@ async function installJdbcPluginLocal() {
   if (typeof selected !== "string") return;
   isInstallingJdbcPlugin.value = true;
   try {
-    jdbcPluginStatus.value = await invoke<JdbcPluginStatus>("install_jdbc_plugin_local", { path: selected });
+    jdbcPluginStatus.value = await api.installJdbcPluginLocal(selected);
     toast(t("settings.jdbcPluginInstallSuccess"));
     await loadJdbcDrivers();
   } catch (e: any) {
@@ -423,19 +400,18 @@ async function deleteJdbcDriver(path: string) {
 // ──────────── Lifecycle ────────────
 
 onMounted(async () => {
-  updateAgentDrivers(await invoke<AgentDriverInfo[]>("list_installed_agents_local"));
+  updateAgentDrivers(await api.listInstalledAgentsLocal());
   void loadJavaRuntimeConfig();
 
-  invoke<AgentDriverInfo[]>("list_installed_agents").then((result) => {
+  api.listInstalledAgents().then((result) => {
     updateAgentDrivers(result);
   });
 
-  unlisten = await listen<DriverInstallProgress>("agent-install-progress", (event) => {
-    const payload = event.payload as any;
+  unlisten = await api.listenAgentInstallProgress((payload) => {
     if (payload.step === "done" || payload.step === "all-done") {
       progress.value = null;
     } else {
-      progress.value = payload;
+      progress.value = payload as DriverInstallProgress;
     }
     if (payload.db_type && payload.total_drivers) {
       upgradingCurrent.value = drivers.value.find((d) => d.db_type === payload.db_type)?.label ?? payload.db_type;

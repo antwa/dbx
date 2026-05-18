@@ -21,6 +21,34 @@ import type {
 } from "@/types/database";
 import type { AiConfig } from "@/stores/settingsStore";
 
+export interface AgentDriverInfo {
+  db_type: string;
+  label: string;
+  version: string;
+  size: number;
+  installed: boolean;
+  installed_version: string | null;
+  update_available: boolean;
+  jre: string;
+  jre_installed: boolean;
+}
+
+export type JavaRuntimeMode = "managed" | "system" | "custom";
+
+export interface JavaRuntimeConfig {
+  mode: JavaRuntimeMode;
+  custom_java_path: string | null;
+}
+
+export interface DriverInstallProgress {
+  step: string;
+  downloaded?: number;
+  total?: number;
+  db_type?: string;
+  current?: number;
+  total_drivers?: number;
+}
+
 export interface AiMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -304,8 +332,58 @@ export async function installJdbcPlugin(): Promise<JdbcPluginStatus> {
   return invoke("install_jdbc_plugin");
 }
 
+export async function installJdbcPluginLocal(path: string): Promise<JdbcPluginStatus> {
+  return invoke("install_jdbc_plugin_local", { path });
+}
+
 export async function uninstallJdbcPlugin(): Promise<JdbcPluginStatus> {
   return invoke("uninstall_jdbc_plugin");
+}
+
+export async function listInstalledAgentsLocal(): Promise<AgentDriverInfo[]> {
+  return invoke("list_installed_agents_local");
+}
+
+export async function listInstalledAgents(): Promise<AgentDriverInfo[]> {
+  return invoke("list_installed_agents");
+}
+
+export async function installAgent(dbType: string): Promise<void> {
+  return invoke("install_agent", { dbType });
+}
+
+export async function upgradeAllAgents(): Promise<number> {
+  return invoke("upgrade_all_agents");
+}
+
+export async function uninstallAgent(dbType: string): Promise<void> {
+  return invoke("uninstall_agent", { dbType });
+}
+
+export async function getAgentJavaRuntimeConfig(): Promise<JavaRuntimeConfig> {
+  return invoke("get_agent_java_runtime_config");
+}
+
+export async function setAgentJavaRuntimeConfig(config: JavaRuntimeConfig): Promise<JavaRuntimeConfig> {
+  return invoke("set_agent_java_runtime_config", { config });
+}
+
+export async function invalidateAgentRegistryCache(): Promise<void> {
+  return invoke("invalidate_agent_registry_cache");
+}
+
+export async function reinstallJre(jreKey?: string): Promise<void> {
+  return invoke("reinstall_jre", { jreKey });
+}
+
+export async function uninstallJre(jreKey: string): Promise<void> {
+  return invoke("uninstall_jre", { jreKey });
+}
+
+export async function listenAgentInstallProgress(
+  handler: (progress: DriverInstallProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DriverInstallProgress>("agent-install-progress", (event) => handler(event.payload));
 }
 
 export async function loadSavedSqlLibrary(): Promise<SavedSqlLibrary> {

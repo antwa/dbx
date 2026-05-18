@@ -82,6 +82,20 @@ async fn main() {
         .route("/connection/save", post(routes::connection::save_connections))
         .route("/connection/list", get(routes::connection::load_connections))
         .route("/plugins", get(routes::plugins::list_plugins))
+        // Agent drivers
+        .route("/agents/installed-local", get(routes::agents::list_installed_agents_local))
+        .route("/agents/installed", get(routes::agents::list_installed_agents))
+        .route("/agents/install", post(routes::agents::install_agent))
+        .route("/agents/upgrade-all", post(routes::agents::upgrade_all_agents))
+        .route("/agents/uninstall", post(routes::agents::uninstall_agent))
+        .route(
+            "/agents/java-runtime",
+            get(routes::agents::get_agent_java_runtime_config).post(routes::agents::set_agent_java_runtime_config),
+        )
+        .route("/agents/invalidate-registry-cache", post(routes::agents::invalidate_agent_registry_cache))
+        .route("/agents/reinstall-jre", post(routes::agents::reinstall_jre))
+        .route("/agents/uninstall-jre", post(routes::agents::uninstall_jre))
+        .route("/agents/progress/{operationId}", get(routes::agents::agent_progress))
         // Schema
         .route("/schema/databases", get(routes::schema::list_databases))
         .route("/schema/schemas", get(routes::schema::list_schemas))

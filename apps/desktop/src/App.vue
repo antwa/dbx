@@ -623,14 +623,16 @@ function handleContextMenu(e: MouseEvent) {
   e.preventDefault();
 }
 
+function openDriverStoreFromEvent() {
+  showDriverStore.value = true;
+}
+
 onMounted(async () => {
   console.log("[STARTUP] onMounted begin");
   const mountStart = performance.now();
   applyTheme();
   window.addEventListener("keydown", handleKeydown, true);
-  window.addEventListener("dbx-open-driver-store", () => {
-    showDriverStore.value = true;
-  });
+  window.addEventListener("dbx-open-driver-store", openDriverStoreFromEvent);
   if (isDesktop) {
     document.addEventListener("contextmenu", handleContextMenu);
   }
@@ -684,6 +686,7 @@ onUnmounted(() => {
     clearInterval(updateCheckTimer);
   }
   window.removeEventListener("keydown", handleKeydown, true);
+  window.removeEventListener("dbx-open-driver-store", openDriverStoreFromEvent);
   document.removeEventListener("contextmenu", handleContextMenu);
 });
 </script>

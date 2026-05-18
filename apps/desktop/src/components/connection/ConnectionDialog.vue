@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { uuid } from "@/lib/utils";
 import { useI18n } from "vue-i18n";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -736,10 +735,10 @@ async function loadJdbcDrivers() {
 }
 
 async function loadAgentDrivers() {
-  if (!isDesktop) return;
   try {
-    agentDrivers.value = await invoke<AgentDriverInstallState[]>("list_installed_agents_local");
-    invoke<AgentDriverInstallState[]>("list_installed_agents")
+    agentDrivers.value = await api.listInstalledAgentsLocal();
+    api
+      .listInstalledAgents()
       .then((drivers) => {
         agentDrivers.value = drivers;
       })

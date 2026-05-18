@@ -20,9 +20,12 @@ import type {
 } from "@/types/database";
 import type { AiConfig } from "@/stores/settingsStore";
 import type {
+  AgentDriverInfo,
   AiCompletionRequest,
   AiStreamChunk,
   AiConversation,
+  DriverInstallProgress,
+  JavaRuntimeConfig,
   UpdateInfo,
   RedisDatabaseInfo,
   RedisValue,
@@ -125,8 +128,67 @@ export async function installJdbcPlugin(): Promise<JdbcPluginStatus> {
   return { installed: false, version: null, protocol_version: null, compatible: true, path: "" };
 }
 
+export async function installJdbcPluginLocal(_path: string): Promise<JdbcPluginStatus> {
+  return { installed: false, version: null, protocol_version: null, compatible: true, path: "" };
+}
+
 export async function uninstallJdbcPlugin(): Promise<JdbcPluginStatus> {
   return { installed: false, version: null, protocol_version: null, compatible: true, path: "" };
+}
+
+export async function listInstalledAgentsLocal(): Promise<AgentDriverInfo[]> {
+  return get("/api/agents/installed-local");
+}
+
+export async function listInstalledAgents(): Promise<AgentDriverInfo[]> {
+  return get("/api/agents/installed");
+}
+
+export async function installAgent(dbType: string): Promise<void> {
+  await post("/api/agents/install", { dbType });
+}
+
+export async function upgradeAllAgents(): Promise<number> {
+  const result: { count: number } = await post("/api/agents/upgrade-all", {});
+  return result.count;
+}
+
+export async function uninstallAgent(dbType: string): Promise<void> {
+  await post("/api/agents/uninstall", { dbType });
+}
+
+export async function getAgentJavaRuntimeConfig(): Promise<JavaRuntimeConfig> {
+  return get("/api/agents/java-runtime");
+}
+
+export async function setAgentJavaRuntimeConfig(config: JavaRuntimeConfig): Promise<JavaRuntimeConfig> {
+  return post("/api/agents/java-runtime", { config });
+}
+
+export async function invalidateAgentRegistryCache(): Promise<void> {
+  await post("/api/agents/invalidate-registry-cache", {});
+}
+
+export async function reinstallJre(jreKey?: string): Promise<void> {
+  await post("/api/agents/reinstall-jre", { jreKey });
+}
+
+export async function uninstallJre(jreKey: string): Promise<void> {
+  await post("/api/agents/uninstall-jre", { jreKey });
+}
+
+export async function listenAgentInstallProgress(
+  handler: (progress: DriverInstallProgress) => void,
+): Promise<() => void> {
+  const es = new EventSource("/api/agents/progress/global");
+  es.onmessage = (event) => {
+    try {
+      handler(JSON.parse(event.data));
+    } catch {
+      /* ignore malformed progress events */
+    }
+  };
+  return () => es.close();
 }
 
 export async function loadSavedSqlLibrary(): Promise<SavedSqlLibrary> {

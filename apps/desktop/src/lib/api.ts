@@ -42,7 +42,19 @@ export const importJdbcDrivers = forward("importJdbcDrivers");
 export const deleteJdbcDriver = forward("deleteJdbcDriver");
 export const jdbcPluginStatus = forward("jdbcPluginStatus");
 export const installJdbcPlugin = forward("installJdbcPlugin");
+export const installJdbcPluginLocal = forward("installJdbcPluginLocal");
 export const uninstallJdbcPlugin = forward("uninstallJdbcPlugin");
+export const listInstalledAgentsLocal = forward("listInstalledAgentsLocal");
+export const listInstalledAgents = forward("listInstalledAgents");
+export const installAgent = forward("installAgent");
+export const upgradeAllAgents = forward("upgradeAllAgents");
+export const uninstallAgent = forward("uninstallAgent");
+export const getAgentJavaRuntimeConfig = forward("getAgentJavaRuntimeConfig");
+export const setAgentJavaRuntimeConfig = forward("setAgentJavaRuntimeConfig");
+export const invalidateAgentRegistryCache = forward("invalidateAgentRegistryCache");
+export const reinstallJre = forward("reinstallJre");
+export const uninstallJre = forward("uninstallJre");
+export const listenAgentInstallProgress = forward("listenAgentInstallProgress");
 export const loadSavedSqlLibrary = forward("loadSavedSqlLibrary");
 export const saveSavedSqlFolder = forward("saveSavedSqlFolder");
 export const deleteSavedSqlFolder = forward("deleteSavedSqlFolder");
@@ -157,6 +169,10 @@ export type {
   AiStreamChunk,
   AiChatMessage,
   AiConversation,
+  AgentDriverInfo,
+  JavaRuntimeMode,
+  JavaRuntimeConfig,
+  DriverInstallProgress,
   UpdateInfo,
   RedisDatabaseInfo,
   RedisKeyInfo,
