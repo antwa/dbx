@@ -18,6 +18,7 @@ import java.sql.Date;
 import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.DriverPropertyInfo;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -38,16 +39,18 @@ import java.util.logging.Logger;
 public final class DbxJdbcPlugin {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_ROWS = 10_000;
-    private static final JdbcDriverQuirks DEFAULT_QUIRKS = new JdbcDriverQuirks(false);
-    private static final JdbcDriverQuirks YASHAN_QUIRKS = new JdbcDriverQuirks(true);
+    private static final JdbcDriverQuirks DEFAULT_QUIRKS = new JdbcDriverQuirks(false, false);
+    private static final JdbcDriverQuirks YASHAN_QUIRKS = new JdbcDriverQuirks(true, false);
+    private static final JdbcDriverQuirks ORACLE_QUIRKS = new JdbcDriverQuirks(false, true);
     private static final List<JdbcDriverQuirkRule> DRIVER_QUIRK_RULES = List.of(
-        new JdbcDriverQuirkRule("jdbc:yasdb:", YASHAN_QUIRKS)
+        new JdbcDriverQuirkRule("jdbc:yasdb:", YASHAN_QUIRKS),
+        new JdbcDriverQuirkRule("jdbc:oracle:", ORACLE_QUIRKS)
     );
     private static String registeredDriverKey = "";
     private static String sharedConnectionKey = "";
     private static Connection sharedConnection;
 
-    record JdbcDriverQuirks(boolean skipExecutionContext) {
+    record JdbcDriverQuirks(boolean skipExecutionContext, boolean useOracleMetadata) {
     }
 
     private record JdbcDriverQuirkRule(String urlPrefix, JdbcDriverQuirks quirks) {
@@ -195,6 +198,12 @@ public final class DbxJdbcPlugin {
         if (password != null) {
             properties.setProperty("password", password);
         }
+        if (isOracleUrl(url)) {
+            properties.putIfAbsent("remarksReporting", "false");
+            properties.putIfAbsent("restrictGetTables", "true");
+            properties.putIfAbsent("includeSynonyms", "false");
+            properties.putIfAbsent("oracle.jdbc.defaultRowPrefetch", "100");
+        }
         sharedConnection = DriverManager.getConnection(url, properties);
         sharedConnectionKey = key;
         return sharedConnection;
@@ -282,6 +291,9 @@ public final class DbxJdbcPlugin {
     private static JsonNode listDatabases(JsonNode connection) throws SQLException {
         ArrayNode result = MAPPER.createArrayNode();
         Connection conn = openConnection(connection);
+        if (driverQuirks(connection).useOracleMetadata()) {
+            return result;
+        }
         try (ResultSet rs = conn.getMetaData().getCatalogs()) {
             while (rs.next()) {
                 String name = rs.getString("TABLE_CAT");
@@ -313,6 +325,9 @@ public final class DbxJdbcPlugin {
     private static JsonNode listSchemas(JsonNode connection, String database) throws SQLException {
         ArrayNode result = MAPPER.createArrayNode();
         Connection conn = openConnection(connection);
+        if (driverQuirks(connection).useOracleMetadata()) {
+            return oracleListSchemas(conn);
+        }
             DatabaseMetaData meta = conn.getMetaData();
             try (ResultSet rs = meta.getSchemas(emptyToNull(database), null)) {
                 appendSchemas(result, rs);
@@ -341,8 +356,11 @@ public final class DbxJdbcPlugin {
 
     private static JsonNode listTables(JsonNode connection, String database, String schema) throws SQLException {
         ArrayNode result = MAPPER.createArrayNode();
-        String[] types = new String[] {"TABLE", "VIEW", "MATERIALIZED VIEW", "SYSTEM TABLE", "SYSTEM VIEW"};
         Connection conn = openConnection(connection);
+        if (driverQuirks(connection).useOracleMetadata()) {
+            return oracleListTables(conn, oracleEffectiveSchema(conn, schema));
+        }
+        String[] types = new String[] {"TABLE", "VIEW", "MATERIALIZED VIEW", "SYSTEM TABLE", "SYSTEM VIEW"};
         DatabaseMetaData meta = conn.getMetaData();
         appendTables(result, meta, emptyToNull(database), emptyToNull(schema), types);
         if (result.isEmpty() && database != null) {
@@ -354,6 +372,9 @@ public final class DbxJdbcPlugin {
     private static JsonNode listObjects(JsonNode connection, String database, String schema) throws SQLException {
         ArrayNode result = MAPPER.createArrayNode();
         Connection conn = openConnection(connection);
+        if (driverQuirks(connection).useOracleMetadata()) {
+            return oracleListObjects(conn, oracleEffectiveSchema(conn, schema), schema);
+        }
         DatabaseMetaData meta = conn.getMetaData();
         String catalog = emptyToNull(database);
         String schemaPattern = emptyToNull(schema);
@@ -403,6 +424,9 @@ public final class DbxJdbcPlugin {
     private static JsonNode getColumns(JsonNode connection, String database, String schema, String table) throws SQLException {
         ArrayNode result = MAPPER.createArrayNode();
         Connection conn = openConnection(connection);
+        if (driverQuirks(connection).useOracleMetadata()) {
+            return oracleGetColumns(conn, oracleEffectiveSchema(conn, schema), table);
+        }
             DatabaseMetaData meta = conn.getMetaData();
             Set<String> primaryKeys = primaryKeys(meta, database, schema, table);
             appendColumns(result, meta, emptyToNull(database), emptyToNull(schema), table, primaryKeys);
@@ -514,6 +538,147 @@ public final class DbxJdbcPlugin {
             }
         }
         return primaryKeys;
+    }
+
+    // --- Oracle-specific metadata methods ---
+
+    private static boolean isOracleUrl(String url) {
+        return url != null && url.regionMatches(true, 0, "jdbc:oracle:", 0, 12);
+    }
+
+    private static String oracleEffectiveSchema(Connection conn, String schema) throws SQLException {
+        if (schema != null && !schema.isBlank()) {
+            return schema.toUpperCase();
+        }
+        return conn.getMetaData().getUserName();
+    }
+
+    private static JsonNode oracleListSchemas(Connection conn) throws SQLException {
+        ArrayNode result = MAPPER.createArrayNode();
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT username FROM all_users ORDER BY username")) {
+            while (rs.next()) {
+                String name = rs.getString(1);
+                if (name != null && !name.isBlank()) {
+                    result.add(name);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static JsonNode oracleListTables(Connection conn, String owner) throws SQLException {
+        ArrayNode result = MAPPER.createArrayNode();
+        String sql =
+            "SELECT table_name AS name, 'TABLE' AS table_type, comments " +
+            "FROM all_tab_comments WHERE owner = ? AND table_type = 'TABLE' " +
+            "UNION ALL " +
+            "SELECT table_name AS name, 'VIEW' AS table_type, comments " +
+            "FROM all_tab_comments WHERE owner = ? AND table_type = 'VIEW' " +
+            "ORDER BY name";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, owner);
+            ps.setString(2, owner);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ObjectNode item = MAPPER.createObjectNode();
+                    item.put("name", rs.getString("name"));
+                    item.put("table_type", rs.getString("table_type"));
+                    putNullable(item, "comment", rs.getString("comments"));
+                    result.add(item);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static JsonNode oracleListObjects(Connection conn, String owner, String schemaLabel) throws SQLException {
+        ArrayNode result = MAPPER.createArrayNode();
+        String tableSql =
+            "SELECT table_name AS name, table_type AS object_type, comments " +
+            "FROM all_tab_comments WHERE owner = ? ORDER BY name";
+        try (PreparedStatement ps = conn.prepareStatement(tableSql)) {
+            ps.setString(1, owner);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ObjectNode item = MAPPER.createObjectNode();
+                    item.put("name", rs.getString("name"));
+                    item.put("object_type", rs.getString("object_type"));
+                    putNullable(item, "schema", schemaLabel);
+                    putNullable(item, "comment", rs.getString("comments"));
+                    result.add(item);
+                }
+            }
+        }
+        String procSql =
+            "SELECT object_name AS name, object_type " +
+            "FROM all_procedures WHERE owner = ? AND object_type IN ('PROCEDURE', 'FUNCTION') " +
+            "AND procedure_name IS NULL ORDER BY object_name";
+        try (PreparedStatement ps = conn.prepareStatement(procSql)) {
+            ps.setString(1, owner);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ObjectNode item = MAPPER.createObjectNode();
+                    item.put("name", rs.getString("name"));
+                    item.put("object_type", rs.getString("object_type"));
+                    putNullable(item, "schema", schemaLabel);
+                    item.putNull("comment");
+                    result.add(item);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static JsonNode oracleGetColumns(Connection conn, String owner, String table) throws SQLException {
+        ArrayNode result = MAPPER.createArrayNode();
+        Set<String> pks = oraclePrimaryKeys(conn, owner, table);
+        String sql =
+            "SELECT c.column_name, c.data_type, c.nullable, c.data_default, " +
+            "c.data_precision, c.data_scale, c.char_length, cc.comments " +
+            "FROM all_tab_columns c " +
+            "LEFT JOIN all_col_comments cc ON cc.owner = c.owner AND cc.table_name = c.table_name AND cc.column_name = c.column_name " +
+            "WHERE c.owner = ? AND c.table_name = ? ORDER BY c.column_id";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, owner);
+            ps.setString(2, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString("column_name");
+                    ObjectNode item = MAPPER.createObjectNode();
+                    item.put("name", name);
+                    item.put("data_type", rs.getString("data_type"));
+                    item.put("is_nullable", !"N".equals(rs.getString("nullable")));
+                    putNullable(item, "column_default", rs.getString("data_default"));
+                    item.put("is_primary_key", pks.contains(name));
+                    item.putNull("extra");
+                    putNullable(item, "comment", rs.getString("comments"));
+                    putNullableInt(item, "numeric_precision", rs.getObject("data_precision"));
+                    putNullableInt(item, "numeric_scale", rs.getObject("data_scale"));
+                    putNullableInt(item, "character_maximum_length", rs.getObject("char_length"));
+                    result.add(item);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static Set<String> oraclePrimaryKeys(Connection conn, String owner, String table) throws SQLException {
+        Set<String> keys = new HashSet<>();
+        String sql =
+            "SELECT cols.column_name FROM all_constraints cons " +
+            "JOIN all_cons_columns cols ON cons.constraint_name = cols.constraint_name AND cons.owner = cols.owner " +
+            "WHERE cons.constraint_type = 'P' AND cons.owner = ? AND cons.table_name = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, owner);
+            ps.setString(2, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    keys.add(rs.getString("column_name"));
+                }
+            }
+        }
+        return keys;
     }
 
     private static Object readValue(ResultSet rs, int index) throws SQLException {
