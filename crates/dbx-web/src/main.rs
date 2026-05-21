@@ -92,6 +92,7 @@ async fn main() {
         .route("/agents/install", post(routes::agents::install_agent))
         .route("/agents/upgrade-all", post(routes::agents::upgrade_all_agents))
         .route("/agents/uninstall", post(routes::agents::uninstall_agent))
+        .route("/agents/import-offline", post(routes::agents::import_agents_from_zip))
         .route(
             "/agents/java-runtime",
             get(routes::agents::get_agent_java_runtime_config).post(routes::agents::set_agent_java_runtime_config),
@@ -199,7 +200,7 @@ async fn main() {
     // Build app
     let mut app = Router::new()
         .nest("/api", api)
-        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(300 * 1024 * 1024))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(cors);
 

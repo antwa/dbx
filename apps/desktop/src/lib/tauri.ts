@@ -389,7 +389,10 @@ export async function invalidateAgentRegistryCache(): Promise<void> {
   return invoke("invalidate_agent_registry_cache");
 }
 
-export async function importAgentsFromZip(path: string): Promise<number> {
+export async function importAgentsFromZip(path: string | File): Promise<number> {
+  if (typeof path !== "string") {
+    throw new Error("Desktop offline ZIP import requires a local file path");
+  }
   return invoke("import_agents_from_zip", { path });
 }
 

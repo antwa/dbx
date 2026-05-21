@@ -179,8 +179,16 @@ export async function invalidateAgentRegistryCache(): Promise<void> {
   await post("/api/agents/invalidate-registry-cache", {});
 }
 
-export async function importAgentsFromZip(_path: string): Promise<number> {
-  throw new Error("Offline ZIP import is only available in the desktop app");
+export async function importAgentsFromZip(fileOrPath: string | File): Promise<number> {
+  if (typeof fileOrPath === "string") {
+    throw new Error("Offline ZIP import in web mode requires a File object, not a file path");
+  }
+  const formData = new FormData();
+  formData.append("file", fileOrPath);
+  const res = await fetch("/api/agents/import-offline", { method: "POST", body: formData });
+  if (!res.ok) throw new Error(await res.text());
+  const result: { count: number } = await res.json();
+  return result.count;
 }
 
 export async function importAgentJar(_dbType: string, _path: string): Promise<void> {

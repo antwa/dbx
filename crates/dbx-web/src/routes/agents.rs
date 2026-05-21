@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Multipart, Path, State};
 use axum::response::sse::{Event, Sse};
 use axum::Json;
 use dbx_core::agent_manager::{
@@ -9,7 +9,7 @@ use dbx_core::agent_manager::{
 };
 use dbx_core::agent_service::{
     build_agent_list, download_temp_path, fetch_registry, find_local_agent_jar, github_url_to_r2_path,
-    install_local_agent, invalidate_registry_cache, replace_download,
+    import_offline_zip, install_local_agent, invalidate_registry_cache, replace_download, OfflineImportProgress,
 };
 use futures::Stream;
 use serde::Deserialize;
@@ -125,6 +125,48 @@ pub async fn set_agent_java_runtime_config(
 pub async fn invalidate_agent_registry_cache() -> Result<Json<serde_json::Value>, AppError> {
     invalidate_registry_cache().await;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn import_agents_from_zip(
+    State(state): State<Arc<WebState>>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let tmp_dir = state.data_dir.join("tmp");
+    std::fs::create_dir_all(&tmp_dir).map_err(|err| AppError(err.to_string()))?;
+
+    while let Some(field) = multipart.next_field().await.map_err(|err| AppError(err.to_string()))? {
+        let file_name = field.file_name().unwrap_or("offline-drivers.zip").to_string();
+        if !file_name.to_ascii_lowercase().ends_with(".zip") {
+            return Err(AppError("Offline driver package must be a .zip file".to_string()));
+        }
+
+        let data = field.bytes().await.map_err(|err| AppError(err.to_string()))?;
+        let zip_path = tmp_dir.join(format!("agent-offline-{}.zip", uuid::Uuid::new_v4()));
+        std::fs::write(&zip_path, &data).map_err(|err| AppError(err.to_string()))?;
+
+        let tx = progress_sender(&state, "global").await;
+        let result = import_offline_zip(&state.app.agent_manager, &zip_path, |p: OfflineImportProgress| {
+            send_progress(
+                &tx,
+                serde_json::json!({
+                    "step": p.step,
+                    "downloaded": p.current as u64,
+                    "total": p.total as u64,
+                    "db_type": p.label,
+                    "current": p.current,
+                    "total_drivers": p.total,
+                }),
+            );
+        })
+        .map_err(AppError);
+        let _ = std::fs::remove_file(&zip_path);
+
+        let result = result?;
+        send_progress(&tx, serde_json::json!({ "step": "done" }));
+        return Ok(Json(serde_json::json!({ "count": result.drivers_installed.len() as u32 })));
+    }
+
+    Err(AppError("No file uploaded".to_string()))
 }
 
 pub async fn reinstall_jre(

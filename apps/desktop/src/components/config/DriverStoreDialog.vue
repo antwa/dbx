@@ -243,15 +243,31 @@ async function uninstallDriver(dbType: string) {
 
 const importingZip = ref(false);
 
-async function importOfflineZip() {
-  if (isWeb || importingZip.value) return;
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const selected = await open({
-    title: "选择离线驱动包",
-    multiple: false,
-    filters: [{ name: "ZIP", extensions: ["zip"] }],
+function chooseWebOfflineZip(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".zip";
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.click();
   });
-  if (typeof selected !== "string") return;
+}
+
+async function importOfflineZip() {
+  if (importingZip.value) return;
+  let selected: string | File | null = null;
+  if (isWeb) {
+    selected = await chooseWebOfflineZip();
+  } else {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const path = await open({
+      title: "选择离线驱动包",
+      multiple: false,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+    selected = typeof path === "string" ? path : null;
+  }
+  if (!selected) return;
   importingZip.value = true;
   progress.value = null;
   try {
