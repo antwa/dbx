@@ -5,7 +5,8 @@ use percent_encoding::percent_decode_str;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::Instant;
-use tokio_postgres::Row;
+use tokio_postgres::types::{FromSql, Type};
+use tokio_postgres::{Row, SimpleQueryMessage};
 
 use super::file_validator::validate_file_path;
 use crate::sql::starts_with_executable_sql_keyword;
@@ -27,6 +28,30 @@ fn pg_temporal_to_json_value(row: &Row, idx: usize) -> Option<serde_json::Value>
         return Some(serde_json::Value::String(v.to_string()));
     }
     None
+}
+
+struct PgSystemU32(u32);
+
+impl<'a> FromSql<'a> for PgSystemU32 {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let bytes: [u8; 4] = raw.try_into().map_err(|_| "expected 4 bytes for PostgreSQL system u32")?;
+        Ok(Self(u32::from_be_bytes(bytes)))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::XID | Type::CID)
+    }
+}
+
+fn pg_u32_number(v: u32) -> serde_json::Value {
+    serde_json::Value::Number(serde_json::Number::from(v))
+}
+
+fn pg_system_u32_to_json(row: &Row, idx: usize) -> Option<serde_json::Value> {
+    if let Ok(v) = row.try_get::<_, u32>(idx) {
+        return Some(pg_u32_number(v));
+    }
+    row.try_get::<_, PgSystemU32>(idx).ok().map(|v| pg_u32_number(v.0))
 }
 
 fn pg_value_to_json(row: &Row, idx: usize, type_name: &str) -> serde_json::Value {
@@ -71,12 +96,21 @@ fn pg_value_to_json(row: &Row, idx: usize, type_name: &str) -> serde_json::Value
             .unwrap_or(serde_json::Value::Null);
     }
 
+    if matches!(upper.as_str(), "OID" | "XID" | "CID") {
+        return pg_system_u32_to_json(row, idx).unwrap_or(serde_json::Value::Null);
+    }
+
     row.try_get::<_, String>(idx)
         .map(serde_json::Value::String)
+        .or_else(|e| pg_system_u32_to_json(row, idx).ok_or(e))
         .or_else(|_| row.try_get::<_, i64>(idx).map(super::safe_i64_to_json))
         .or_else(|_| row.try_get::<_, i32>(idx).map(|v| serde_json::Value::Number(v.into())))
         .or_else(|_| row.try_get::<_, i16>(idx).map(|v| serde_json::Value::Number(v.into())))
         .or_else(|_| row.try_get::<_, i8>(idx).map(|v| serde_json::Value::Number(v.into())))
+        .or_else(|_| {
+            row.try_get::<_, Vec<u32>>(idx)
+                .map(|v| serde_json::Value::Array(v.into_iter().map(pg_u32_number).collect()))
+        })
         .or_else(|_| {
             row.try_get::<_, Vec<i8>>(idx)
                 .map(|v| serde_json::Value::Array(v.into_iter().map(|v| serde_json::Value::Number(v.into())).collect()))
@@ -118,6 +152,119 @@ fn pg_value_to_json(row: &Row, idx: usize, type_name: &str) -> serde_json::Value
             })
         })
         .unwrap_or(serde_json::Value::Null)
+}
+
+fn pg_error_to_string(err: tokio_postgres::Error) -> String {
+    err.as_db_error().map(ToString::to_string).unwrap_or_else(|| err.to_string())
+}
+
+fn should_retry_postgres_text_query(err: &tokio_postgres::Error) -> bool {
+    let message = err.as_db_error().map(ToString::to_string).unwrap_or_else(|| err.to_string()).to_ascii_lowercase();
+    message.contains("no binary output function")
+        || message.contains("no binary send function")
+        || message.contains("cannot display a value of type")
+}
+
+async fn execute_select_prepared(
+    client: &deadpool_postgres::Client,
+    sql: &str,
+    start: Instant,
+    row_limit: usize,
+) -> Result<QueryResult, tokio_postgres::Error> {
+    let stmt = client.prepare_cached(sql).await?;
+    let columns: Vec<String> = stmt.columns().iter().map(|c| c.name().to_string()).collect();
+    let column_types: Vec<String> = stmt.columns().iter().map(|c| c.type_().name().to_string()).collect();
+
+    let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
+    let stream = client.query_raw(&stmt, params).await?;
+    tokio::pin!(stream);
+    let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+    let mut truncated = false;
+
+    while let Some(row_result) = stream.next().await {
+        if result_rows.len() >= row_limit {
+            truncated = true;
+            break;
+        }
+        let row = row_result?;
+        result_rows.push(
+            (0..row.columns().len())
+                .map(|i| pg_value_to_json(&row, i, column_types.get(i).map(String::as_str).unwrap_or("")))
+                .collect(),
+        );
+    }
+
+    Ok(QueryResult {
+        columns,
+        rows: result_rows,
+        affected_rows: 0,
+        execution_time_ms: start.elapsed().as_millis(),
+        truncated,
+        session_id: None,
+        has_more: false,
+    })
+}
+
+async fn execute_select_text(
+    client: &deadpool_postgres::Client,
+    sql: &str,
+    start: Instant,
+    row_limit: usize,
+) -> Result<QueryResult, String> {
+    let messages = client.simple_query(sql).await.map_err(pg_error_to_string)?;
+    let mut columns: Vec<String> = Vec::new();
+    let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::new();
+    let mut truncated = false;
+
+    for message in messages {
+        match message {
+            SimpleQueryMessage::RowDescription(cols) => {
+                columns = cols.iter().map(|c| c.name().to_string()).collect();
+            }
+            SimpleQueryMessage::Row(row) => {
+                if columns.is_empty() {
+                    columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                }
+                if result_rows.len() >= row_limit {
+                    truncated = true;
+                    continue;
+                }
+                let mut values = Vec::with_capacity(row.len());
+                for i in 0..row.len() {
+                    values.push(match row.try_get(i).map_err(pg_error_to_string)? {
+                        Some(value) => serde_json::Value::String(value.to_string()),
+                        None => serde_json::Value::Null,
+                    });
+                }
+                result_rows.push(values);
+            }
+            SimpleQueryMessage::CommandComplete(_) => {}
+            _ => {}
+        }
+    }
+
+    Ok(QueryResult {
+        columns,
+        rows: result_rows,
+        affected_rows: 0,
+        execution_time_ms: start.elapsed().as_millis(),
+        truncated,
+        session_id: None,
+        has_more: false,
+    })
+}
+
+async fn execute_select_query(
+    client: &deadpool_postgres::Client,
+    sql: &str,
+    start: Instant,
+    row_limit: usize,
+) -> Result<QueryResult, String> {
+    match execute_select_prepared(client, sql, start, row_limit).await {
+        Ok(result) => Ok(result),
+        Err(err) if should_retry_postgres_text_query(&err) => execute_select_text(client, sql, start, row_limit).await,
+        Err(err) => Err(pg_error_to_string(err)),
+    }
 }
 
 pub async fn connect(url: &str) -> Result<Pool, String> {
@@ -419,38 +566,7 @@ pub async fn execute_query_with_max_rows(
 
     if starts_with_executable_sql_keyword(sql, &["SELECT", "SHOW", "EXPLAIN", "WITH", "TABLE"]) {
         let client = pool.get().await.map_err(|e| e.to_string())?;
-        let stmt = client.prepare_cached(sql).await.map_err(|e| e.to_string())?;
-        let columns: Vec<String> = stmt.columns().iter().map(|c| c.name().to_string()).collect();
-        let column_types: Vec<String> = stmt.columns().iter().map(|c| c.type_().name().to_string()).collect();
-
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-        let stream = client.query_raw(&stmt, params).await.map_err(|e| e.to_string())?;
-        tokio::pin!(stream);
-        let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::new();
-        let mut truncated = false;
-
-        while let Some(row_result) = stream.next().await {
-            if result_rows.len() >= row_limit {
-                truncated = true;
-                break;
-            }
-            let row = row_result.map_err(|e| e.to_string())?;
-            result_rows.push(
-                (0..row.columns().len())
-                    .map(|i| pg_value_to_json(&row, i, column_types.get(i).map(String::as_str).unwrap_or("")))
-                    .collect(),
-            );
-        }
-
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: 0,
-            execution_time_ms: start.elapsed().as_millis(),
-            truncated,
-            session_id: None,
-            has_more: false,
-        })
+        execute_select_query(&client, sql, start, row_limit).await
     } else {
         let client = pool.get().await.map_err(|e| e.to_string())?;
         let affected = client.execute(sql, &[]).await.map_err(|e| e.to_string())?;
@@ -500,38 +616,7 @@ async fn execute_query_with_max_rows_inner(
     let row_limit = query_result_row_limit(max_rows);
 
     if starts_with_executable_sql_keyword(sql, &["SELECT", "SHOW", "EXPLAIN", "WITH", "TABLE"]) {
-        let stmt = client.prepare_cached(sql).await.map_err(|e| e.to_string())?;
-        let columns: Vec<String> = stmt.columns().iter().map(|c| c.name().to_string()).collect();
-        let column_types: Vec<String> = stmt.columns().iter().map(|c| c.type_().name().to_string()).collect();
-
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
-        let stream = client.query_raw(&stmt, params).await.map_err(|e| e.to_string())?;
-        tokio::pin!(stream);
-        let mut result_rows: Vec<Vec<serde_json::Value>> = Vec::new();
-        let mut truncated = false;
-
-        while let Some(row_result) = stream.next().await {
-            if result_rows.len() >= row_limit {
-                truncated = true;
-                break;
-            }
-            let row = row_result.map_err(|e| e.to_string())?;
-            result_rows.push(
-                (0..row.columns().len())
-                    .map(|i| pg_value_to_json(&row, i, column_types.get(i).map(String::as_str).unwrap_or("")))
-                    .collect(),
-            );
-        }
-
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: 0,
-            execution_time_ms: start.elapsed().as_millis(),
-            truncated,
-            session_id: None,
-            has_more: false,
-        })
+        execute_select_query(client, sql, start, row_limit).await
     } else {
         let affected = client.execute(sql, &[]).await.map_err(|e| e.to_string())?;
 
@@ -690,8 +775,23 @@ pub async fn copy_in(pool: &Pool, sql: &str, data: &[u8]) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_postgres::types::FromSql;
 
     // --- pg_quote_ident ---
+
+    #[test]
+    fn pg_system_u32_decodes_catalog_integer_types() {
+        let raw = 42_u32.to_be_bytes();
+
+        assert_eq!(u32::from_sql(&Type::OID, &raw).unwrap(), 42);
+        assert_eq!(PgSystemU32::from_sql(&Type::XID, &raw).unwrap().0, 42);
+        assert_eq!(PgSystemU32::from_sql(&Type::CID, &raw).unwrap().0, 42);
+        assert!(u32::accepts(&Type::OID));
+        assert!(PgSystemU32::accepts(&Type::XID));
+        assert!(PgSystemU32::accepts(&Type::CID));
+        assert!(!PgSystemU32::accepts(&Type::OID));
+        assert!(!PgSystemU32::accepts(&Type::INT4));
+    }
 
     #[test]
     fn pg_quote_ident_plain_identifier() {
