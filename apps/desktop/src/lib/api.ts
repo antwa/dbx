@@ -129,6 +129,7 @@ export const buildExportSqlInsert = forward("buildExportSqlInsert");
 export const buildDatabaseSqlExport = forward("buildDatabaseSqlExport");
 export const prepareDataCompare = forward("prepareDataCompare");
 export const prepareDataCompareFromTables = forward("prepareDataCompareFromTables");
+export const buildDataCompareSyncPlan = forward("buildDataCompareSyncPlan");
 
 // AI
 export const aiComplete = forward("aiComplete");

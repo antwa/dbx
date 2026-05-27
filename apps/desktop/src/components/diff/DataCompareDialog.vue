@@ -10,9 +10,28 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import { useToast } from "@/composables/useToast";
 import { isSchemaAware } from "@/lib/databaseCapabilities";
 import { copyToClipboard } from "@/lib/clipboard";
+import type {
+  DataCompareCellValue,
+  DataCompareModifiedRow,
+  DataCompareResult,
+  DataCompareRow,
+  DataCompareSyncPlan,
+  DataCompareSyncPlanTableOptions,
+} from "@/lib/dataCompare";
+import type { DatabaseType } from "@/types/database";
 import * as api from "@/lib/api";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
-import { ArrowLeftRight, CheckSquare, Copy, GitCompareArrows, Loader2, Play, Square } from "lucide-vue-next";
+import {
+  ArrowLeftRight,
+  CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  GitCompareArrows,
+  Loader2,
+  Play,
+  Square,
+} from "lucide-vue-next";
 
 interface CompareColumn {
   name: string;
@@ -25,11 +44,27 @@ interface DataCompareTableTask {
 }
 
 type DataCompareTableStatus = "different" | "same" | "error";
+type DiffKind = "added" | "removed" | "modified";
+
+interface SelectableDataCompareRow extends DataCompareRow {
+  selected: boolean;
+}
+
+interface SelectableDataCompareModifiedRow extends DataCompareModifiedRow {
+  selected: boolean;
+}
+
+interface SelectableDataCompareResult {
+  added: SelectableDataCompareRow[];
+  removed: SelectableDataCompareRow[];
+  modified: SelectableDataCompareModifiedRow[];
+}
 
 interface DataCompareTableResult {
   sourceTable: string;
   targetTable: string;
   keyColumns: string[];
+  columns: string[];
   status: DataCompareTableStatus;
   added: number;
   removed: number;
@@ -38,10 +73,14 @@ interface DataCompareTableResult {
   targetRowCount: number;
   sourceTruncated: boolean;
   targetTruncated: boolean;
-  syncStatements: string[];
-  syncSql: string;
+  databaseType?: DatabaseType;
+  diff: SelectableDataCompareResult;
+  expanded: boolean;
+  showAll: Record<DiffKind, boolean>;
   error?: string;
 }
+
+const PREVIEW_LIMIT_OPTIONS = [50, 100, 200, 500];
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -74,11 +113,11 @@ const targetSchemas = ref<string[]>([]);
 const targetTables = ref<string[]>([]);
 
 const keyColumnsText = ref("");
-const rowLimit = ref("1000");
-const syncSql = ref("");
-const syncStatements = ref<string[]>([]);
+const detailPreviewLimit = ref(String(PREVIEW_LIMIT_OPTIONS[1]));
 const batchResults = ref<DataCompareTableResult[]>([]);
+const syncPlan = ref<DataCompareSyncPlan>(emptySyncPlan());
 const comparing = ref(false);
+const planningSync = ref(false);
 const compareProgressCurrent = ref(0);
 const compareProgressTotal = ref(0);
 const compareProgressTable = ref("");
@@ -86,7 +125,11 @@ const executing = ref(false);
 const executedCount = ref(0);
 const executeTotal = ref(0);
 const syncErrors = ref<{ sql: string; error: string }[]>([]);
-const rowLimitOptions = [1000, 5000, 10000, 50000];
+const showAdded = ref(true);
+const showRemoved = ref(true);
+const showModified = ref(true);
+
+let syncPlanRequestId = 0;
 
 const sqlConnections = computed(() =>
   store.connections.filter((connection) => !["redis", "mongodb", "elasticsearch"].includes(connection.db_type)),
@@ -137,7 +180,7 @@ const keyColumns = computed(() =>
     .map((value) => value.trim())
     .filter(Boolean),
 );
-const rowLimitNumber = computed(() => Number(rowLimit.value) || 1000);
+const detailPreviewLimitNumber = computed(() => Number(detailPreviewLimit.value) || PREVIEW_LIMIT_OPTIONS[1]);
 
 const sameTableCount = computed(() => batchResults.value.filter((item) => item.status === "same").length);
 const differentTableCount = computed(() => batchResults.value.filter((item) => item.status === "different").length);
@@ -145,8 +188,15 @@ const failedTableCount = computed(() => batchResults.value.filter((item) => item
 const totalAdded = computed(() => batchResults.value.reduce((sum, item) => sum + item.added, 0));
 const totalRemoved = computed(() => batchResults.value.reduce((sum, item) => sum + item.removed, 0));
 const totalModified = computed(() => batchResults.value.reduce((sum, item) => sum + item.modified, 0));
-const hasAnyTruncated = computed(() => batchResults.value.some((item) => item.sourceTruncated || item.targetTruncated));
 const hasResults = computed(() => batchResults.value.length > 0);
+const visibleKinds = computed(() => [
+  ...(showAdded.value ? (["added"] as DiffKind[]) : []),
+  ...(showRemoved.value ? (["removed"] as DiffKind[]) : []),
+  ...(showModified.value ? (["modified"] as DiffKind[]) : []),
+]);
+const selectedAddedCount = computed(() => selectedDiffCount("added"));
+const selectedRemovedCount = computed(() => selectedDiffCount("removed"));
+const selectedModifiedCount = computed(() => selectedDiffCount("modified"));
 const summary = computed(() => {
   if (!hasResults.value) return "";
   if (batchResults.value.length === 1 && batchResults.value[0]?.status !== "error") {
@@ -167,6 +217,13 @@ const summary = computed(() => {
     modified: totalModified.value,
   });
 });
+const selectedSummary = computed(() =>
+  t("dataCompare.selectedSummary", {
+    added: selectedAddedCount.value,
+    removed: selectedRemovedCount.value,
+    modified: selectedModifiedCount.value,
+  }),
+);
 const compareProgressLabel = computed(() => {
   if (!comparing.value || compareProgressTotal.value === 0) return "";
   return t("dataCompare.comparingTable", {
@@ -176,9 +233,24 @@ const compareProgressLabel = computed(() => {
   });
 });
 
+function emptySyncPlan(): DataCompareSyncPlan {
+  return {
+    insertCount: 0,
+    updateCount: 0,
+    deleteCount: 0,
+    statementCount: 0,
+    syncStatements: [],
+    syncSql: "",
+  };
+}
+
 function connectionIconType(connectionId: string) {
   const config = store.getConfig(connectionId);
   return config?.driver_profile || config?.db_type || "mysql";
+}
+
+function targetDatabaseType(): DatabaseType | undefined {
+  return store.getConfig(targetConnectionId.value)?.db_type;
 }
 
 function resetSelectedSourceTables(nextTables: Iterable<string>) {
@@ -216,12 +288,14 @@ function buildCompareTasks(): DataCompareTableTask[] {
 
 function clearResult() {
   batchResults.value = [];
-  syncSql.value = "";
-  syncStatements.value = [];
+  syncPlan.value = emptySyncPlan();
   syncErrors.value = [];
   compareProgressCurrent.value = 0;
   compareProgressTotal.value = 0;
   compareProgressTable.value = "";
+  executedCount.value = 0;
+  executeTotal.value = 0;
+  syncPlanRequestId++;
 }
 
 function swapSourceTarget() {
@@ -415,6 +489,129 @@ function resultStatusClass(status: DataCompareTableStatus): string {
   return "bg-destructive/15 text-destructive";
 }
 
+function toSelectableDiff(diff: DataCompareResult): SelectableDataCompareResult {
+  return {
+    added: diff.added.map((row) => ({ ...row, selected: true })),
+    removed: diff.removed.map((row) => ({ ...row, selected: true })),
+    modified: diff.modified.map((row) => ({ ...row, selected: true })),
+  };
+}
+
+function buildSelectedDiff(table: DataCompareTableResult): DataCompareResult {
+  return {
+    added: table.diff.added.filter((row) => row.selected).map(stripSelectedRow),
+    removed: table.diff.removed.filter((row) => row.selected).map(stripSelectedRow),
+    modified: table.diff.modified.filter((row) => row.selected).map(stripSelectedModifiedRow),
+  };
+}
+
+function stripSelectedRow(row: SelectableDataCompareRow): DataCompareRow {
+  const { selected: _selected, ...rest } = row;
+  return rest;
+}
+
+function stripSelectedModifiedRow(row: SelectableDataCompareModifiedRow): DataCompareModifiedRow {
+  const { selected: _selected, ...rest } = row;
+  return rest;
+}
+
+function hasDiffRows(table: DataCompareTableResult, kind: DiffKind): boolean {
+  return table.diff[kind].length > 0;
+}
+
+function selectedRows(table: DataCompareTableResult, kind: DiffKind): number {
+  return table.diff[kind].filter((row) => row.selected).length;
+}
+
+function rowsForDisplay(table: DataCompareTableResult, kind: DiffKind) {
+  const rows = table.diff[kind];
+  return table.showAll[kind] ? rows : rows.slice(0, detailPreviewLimitNumber.value);
+}
+
+function remainingRows(table: DataCompareTableResult, kind: DiffKind) {
+  return Math.max(0, table.diff[kind].length - rowsForDisplay(table, kind).length);
+}
+
+function toggleTableExpanded(table: DataCompareTableResult) {
+  table.expanded = !table.expanded;
+}
+
+function toggleShowAll(table: DataCompareTableResult, kind: DiffKind) {
+  table.showAll[kind] = !table.showAll[kind];
+}
+
+function setDiffSelection(kind: DiffKind, selected: boolean) {
+  batchResults.value.forEach((table) => {
+    table.diff[kind].forEach((row) => {
+      row.selected = selected;
+    });
+  });
+  rebuildSyncPlan().catch((e) => toast(String(e), 5000));
+}
+
+function setTableDiffSelection(table: DataCompareTableResult, kind: DiffKind, selected: boolean) {
+  table.diff[kind].forEach((row) => {
+    row.selected = selected;
+  });
+  rebuildSyncPlan().catch((e) => toast(String(e), 5000));
+}
+
+function clearAllSelections() {
+  (["added", "removed", "modified"] as DiffKind[]).forEach((kind) => {
+    batchResults.value.forEach((table) => {
+      table.diff[kind].forEach((row) => {
+        row.selected = false;
+      });
+    });
+  });
+  rebuildSyncPlan().catch((e) => toast(String(e), 5000));
+}
+
+function toggleRowSelection(row: SelectableDataCompareRow | SelectableDataCompareModifiedRow) {
+  row.selected = !row.selected;
+  rebuildSyncPlan().catch((e) => toast(String(e), 5000));
+}
+
+function selectedDiffCount(kind: DiffKind) {
+  return batchResults.value.reduce((sum, table) => sum + selectedRows(table, kind), 0);
+}
+
+function buildSyncPlanTables(): DataCompareSyncPlanTableOptions[] {
+  return batchResults.value
+    .filter((table) => table.status === "different")
+    .map((table) => ({
+      tableName: table.targetTable,
+      schema: targetSchema.value,
+      columns: table.columns,
+      keyColumns: table.keyColumns,
+      diff: buildSelectedDiff(table),
+      databaseType: table.databaseType,
+    }))
+    .filter((table) => table.diff.added.length > 0 || table.diff.removed.length > 0 || table.diff.modified.length > 0);
+}
+
+async function rebuildSyncPlan() {
+  const requestId = ++syncPlanRequestId;
+  const tables = buildSyncPlanTables();
+  if (tables.length === 0) {
+    syncPlan.value = emptySyncPlan();
+    planningSync.value = false;
+    return;
+  }
+  planningSync.value = true;
+  try {
+    const plan = await api.buildDataCompareSyncPlan({ tables });
+    if (requestId !== syncPlanRequestId) return;
+    syncPlan.value = plan;
+  } catch (e: any) {
+    if (requestId !== syncPlanRequestId) return;
+    syncPlan.value = emptySyncPlan();
+    toast(e?.message || String(e), 5000);
+  } finally {
+    if (requestId === syncPlanRequestId) planningSync.value = false;
+  }
+}
+
 async function startCompare() {
   if (!canCompare.value || comparing.value) return;
   const tasks = buildCompareTasks();
@@ -430,8 +627,7 @@ async function startCompare() {
   const sourceColumnCache = new Map<string, CompareColumn[]>();
   const targetColumnCache = new Map<string, CompareColumn[]>();
   const results: DataCompareTableResult[] = [];
-  const mergedStatements: string[] = [];
-  const mergedSqlParts: string[] = [];
+  const currentTargetDatabaseType = targetDatabaseType();
 
   try {
     await Promise.all([
@@ -492,7 +688,6 @@ async function startCompare() {
           targetTable: task.targetTable,
           columns,
           keyColumns: resolvedKeys,
-          rowLimit: rowLimitNumber.value,
         });
 
         const added = preparation.result.added.length;
@@ -504,6 +699,7 @@ async function startCompare() {
           sourceTable: task.sourceTable,
           targetTable: task.targetTable,
           keyColumns: resolvedKeys,
+          columns,
           status,
           added,
           removed,
@@ -512,21 +708,21 @@ async function startCompare() {
           targetRowCount: preparation.targetRowCount,
           sourceTruncated: preparation.sourceTruncated,
           targetTruncated: preparation.targetTruncated,
-          syncStatements: preparation.syncStatements,
-          syncSql: preparation.syncSql,
+          databaseType: currentTargetDatabaseType,
+          diff: toSelectableDiff(preparation.result),
+          expanded: status === "different",
+          showAll: {
+            added: false,
+            removed: false,
+            modified: false,
+          },
         });
-
-        if (preparation.syncStatements.length > 0) {
-          mergedStatements.push(...preparation.syncStatements);
-        }
-        if (preparation.syncSql.trim()) {
-          mergedSqlParts.push(preparation.syncSql.trim());
-        }
       } catch (e: any) {
         results.push({
           sourceTable: task.sourceTable,
           targetTable: task.targetTable,
           keyColumns: keyColumns.value,
+          columns: [],
           status: "error",
           added: 0,
           removed: 0,
@@ -535,16 +731,21 @@ async function startCompare() {
           targetRowCount: 0,
           sourceTruncated: false,
           targetTruncated: false,
-          syncStatements: [],
-          syncSql: "",
+          databaseType: currentTargetDatabaseType,
+          diff: { added: [], removed: [], modified: [] },
+          expanded: false,
+          showAll: {
+            added: false,
+            removed: false,
+            modified: false,
+          },
           error: e?.message || String(e),
         });
       }
     }
 
     batchResults.value = results;
-    syncStatements.value = mergedStatements;
-    syncSql.value = mergedSqlParts.join("\n\n");
+    await rebuildSyncPlan();
   } catch (e: any) {
     toast(e?.message || String(e), 5000);
   } finally {
@@ -557,7 +758,7 @@ async function startCompare() {
 
 async function copySql() {
   try {
-    await copyToClipboard(syncSql.value);
+    await copyToClipboard(syncPlan.value.syncSql);
     toast(t("grid.copied"));
   } catch (e: any) {
     toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
@@ -565,14 +766,14 @@ async function copySql() {
 }
 
 async function executeSql() {
-  if (!syncSql.value.trim() || syncStatements.value.length === 0 || executing.value) return;
+  if (!syncPlan.value.syncSql.trim() || syncPlan.value.syncStatements.length === 0 || executing.value) return;
   executing.value = true;
   syncErrors.value = [];
-  executeTotal.value = syncStatements.value.length;
+  executeTotal.value = syncPlan.value.syncStatements.length;
   executedCount.value = 0;
   try {
     await store.ensureConnected(targetConnectionId.value);
-    for (const stmt of syncStatements.value) {
+    for (const stmt of syncPlan.value.syncStatements) {
       try {
         await api.executeQuery(targetConnectionId.value, targetDatabase.value, stmt, targetSchema.value);
       } catch (e: any) {
@@ -584,13 +785,51 @@ async function executeSql() {
     if (failed === 0) {
       toast(t("dataCompare.syncSuccess"), 2000);
     } else {
-      toast(t("diff.syncSummary", { success: syncStatements.value.length - failed, failed }), 5000);
+      toast(t("diff.syncSummary", { success: syncPlan.value.syncStatements.length - failed, failed }), 5000);
     }
   } catch (e: any) {
     toast(e?.message || String(e), 5000);
   } finally {
     executing.value = false;
   }
+}
+
+function formatValue(value: DataCompareCellValue): string {
+  if (value == null) return "NULL";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateText(text: string, limit = 160): string {
+  return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
+}
+
+function formatKeyValues(values: Record<string, DataCompareCellValue>): string {
+  return Object.entries(values)
+    .map(([column, value]) => `${column}=${formatValue(value)}`)
+    .join(", ");
+}
+
+function formatRowValues(values: Record<string, DataCompareCellValue>): string {
+  return truncateText(
+    Object.entries(values)
+      .map(([column, value]) => `${column}=${formatValue(value)}`)
+      .join(", "),
+  );
+}
+
+function formatModifiedSummary(row: SelectableDataCompareModifiedRow): string {
+  return truncateText(
+    row.changes
+      .map((change) => `${change.column}: ${formatValue(change.target)} -> ${formatValue(change.source)}`)
+      .join(", "),
+    220,
+  );
 }
 
 watch(sourceConnectionId, (id) => {
@@ -689,7 +928,7 @@ watch(
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="sm:max-w-4xl max-h-[85vh] flex flex-col overflow-hidden" @interact-outside.prevent>
+    <DialogContent class="sm:max-w-5xl max-h-[85vh] flex flex-col overflow-hidden" @interact-outside.prevent>
       <DialogHeader>
         <DialogTitle class="flex items-center gap-2">
           <GitCompareArrows class="w-4 h-4" />
@@ -889,25 +1128,67 @@ watch(
           </div>
         </div>
 
-        <div class="space-y-1">
-          <Label class="text-xs font-medium">{{ t("dataCompare.rowLimit") }}</Label>
-          <Select v-model="rowLimit">
-            <SelectTrigger class="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="limit in rowLimitOptions" :key="limit" :value="String(limit)">
-                {{ t("dataCompare.rowLimitOption", { count: limit }) }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
         <div v-if="hasResults" class="space-y-3">
-          <div class="rounded-lg border p-3 text-sm">
-            {{ summary }}
-            <div v-if="hasAnyTruncated" class="mt-1 text-xs text-yellow-600">
-              {{ t("dataCompare.truncatedWarning") }}
+          <div class="rounded-lg border p-3 text-sm space-y-2">
+            <div>{{ summary }}</div>
+            <div class="text-xs text-muted-foreground">{{ selectedSummary }}</div>
+          </div>
+
+          <div class="rounded-lg border p-3 space-y-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                class="h-7 text-xs"
+                :class="showAdded ? 'border-primary' : ''"
+                @click="showAdded = !showAdded"
+              >
+                {{ t("diff.added") }} · {{ totalAdded }}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                class="h-7 text-xs"
+                :class="showRemoved ? 'border-primary' : ''"
+                @click="showRemoved = !showRemoved"
+              >
+                {{ t("diff.removed") }} · {{ totalRemoved }}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                class="h-7 text-xs"
+                :class="showModified ? 'border-primary' : ''"
+                @click="showModified = !showModified"
+              >
+                {{ t("diff.modified") }} · {{ totalModified }}
+              </Button>
+              <span class="flex-1" />
+              <Select v-model="detailPreviewLimit">
+                <SelectTrigger class="h-7 w-32 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="limit in PREVIEW_LIMIT_OPTIONS" :key="limit" :value="String(limit)">
+                    {{ t("dataCompare.previewLimitOption", { count: limit }) }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" class="h-7 text-xs" @click="setDiffSelection('added', true)">
+                {{ t("dataCompare.selectAllKind", { kind: t("diff.added") }) }}
+              </Button>
+              <Button size="sm" variant="outline" class="h-7 text-xs" @click="setDiffSelection('removed', true)">
+                {{ t("dataCompare.selectAllKind", { kind: t("diff.removed") }) }}
+              </Button>
+              <Button size="sm" variant="outline" class="h-7 text-xs" @click="setDiffSelection('modified', true)">
+                {{ t("dataCompare.selectAllKind", { kind: t("diff.modified") }) }}
+              </Button>
+              <Button size="sm" variant="outline" class="h-7 text-xs" @click="clearAllSelections">
+                {{ t("dataCompare.clearSelection") }}
+              </Button>
             </div>
           </div>
 
@@ -948,12 +1229,22 @@ watch(
                             t("dataCompare.rowCounts", {
                               source: item.sourceRowCount,
                               target: item.targetRowCount,
-                              limit: rowLimitNumber,
                             })
                           }}
                         </div>
                         <div class="mt-1">
                           {{ t("dataCompare.keyColumnsInline", { columns: item.keyColumns.join(", ") }) }}
+                        </div>
+                        <div v-if="item.status === 'different'" class="mt-1">
+                          {{
+                            t("dataCompare.selectedInline", {
+                              selected:
+                                selectedRows(item, "added") +
+                                selectedRows(item, "removed") +
+                                selectedRows(item, "modified"),
+                              total: item.added + item.removed + item.modified,
+                            })
+                          }}
                         </div>
                       </template>
                     </td>
@@ -963,15 +1254,118 @@ watch(
             </div>
           </div>
 
-          <div v-if="syncSql.trim()" class="space-y-1">
+          <div class="space-y-3">
+            <div
+              v-for="item in batchResults.filter((entry) => entry.status === 'different')"
+              :key="`details-${item.sourceTable}:${item.targetTable}`"
+              class="rounded-lg border overflow-hidden"
+            >
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 border-b bg-muted/30 px-3 py-2 text-left text-sm font-medium"
+                @click="toggleTableExpanded(item)"
+              >
+                <ChevronDown v-if="item.expanded" class="h-4 w-4 shrink-0" />
+                <ChevronRight v-else class="h-4 w-4 shrink-0" />
+                <span class="font-mono">{{ item.sourceTable }}</span>
+                <span class="text-muted-foreground">→</span>
+                <span class="font-mono text-muted-foreground">{{ item.targetTable }}</span>
+              </button>
+
+              <div v-if="item.expanded" class="space-y-3 p-3">
+                <div
+                  v-for="kind in visibleKinds"
+                  :key="`${item.sourceTable}:${kind}`"
+                  class="rounded-lg border"
+                  v-show="hasDiffRows(item, kind)"
+                >
+                  <div class="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-3 py-2 text-xs">
+                    <span class="font-medium">{{ t(`diff.${kind}`) }}</span>
+                    <span class="text-muted-foreground"
+                      >{{ selectedRows(item, kind) }}/{{ item.diff[kind].length }}</span
+                    >
+                    <span class="flex-1" />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-6 px-2 text-xs"
+                      @click="setTableDiffSelection(item, kind, true)"
+                    >
+                      {{ t("dataCompare.selectAllKind", { kind: t(`diff.${kind}`) }) }}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-6 px-2 text-xs"
+                      @click="setTableDiffSelection(item, kind, false)"
+                    >
+                      {{ t("dataCompare.clearKind", { kind: t(`diff.${kind}`) }) }}
+                    </Button>
+                    <Button
+                      v-if="item.diff[kind].length > detailPreviewLimitNumber"
+                      size="sm"
+                      variant="ghost"
+                      class="h-6 px-2 text-xs"
+                      @click="toggleShowAll(item, kind)"
+                    >
+                      {{
+                        item.showAll[kind]
+                          ? t("dataCompare.showLessRows")
+                          : t("dataCompare.showAllRows", { count: item.diff[kind].length })
+                      }}
+                    </Button>
+                  </div>
+
+                  <div class="max-h-72 overflow-auto divide-y">
+                    <button
+                      v-for="row in rowsForDisplay(item, kind)"
+                      :key="`${item.sourceTable}:${kind}:${row.key}`"
+                      type="button"
+                      class="flex w-full items-start gap-3 px-3 py-2 text-left text-xs hover:bg-muted/40"
+                      @click="toggleRowSelection(row)"
+                    >
+                      <CheckSquare v-if="row.selected" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                      <Square v-else class="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/40" />
+                      <div class="min-w-0 flex-1">
+                        <div class="font-mono">{{ formatKeyValues(row.keyValues) }}</div>
+                        <div class="mt-1 text-muted-foreground break-words">
+                          {{
+                            kind === "modified"
+                              ? formatModifiedSummary(row as SelectableDataCompareModifiedRow)
+                              : formatRowValues((row as SelectableDataCompareRow).values)
+                          }}
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+
+                  <div
+                    v-if="remainingRows(item, kind) > 0 && !item.showAll[kind]"
+                    class="border-t px-3 py-2 text-xs text-muted-foreground"
+                  >
+                    {{ t("dataCompare.remainingRows", { count: remainingRows(item, kind) }) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="planningSync" class="text-sm text-muted-foreground">
+            {{ t("dataCompare.planningSync") }}
+          </div>
+          <div v-else-if="syncPlan.syncSql.trim()" class="space-y-1">
             <Label class="text-xs font-medium">{{ t("diff.generatedSql") }}</Label>
             <textarea
-              v-model="syncSql"
+              :value="syncPlan.syncSql"
+              readonly
               class="w-full h-48 rounded-lg border bg-muted/20 p-3 font-mono text-xs resize-none focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
           <div v-else-if="differentTableCount === 0 && failedTableCount === 0" class="text-sm text-muted-foreground">
             {{ t("dataCompare.noDifferences") }}
+          </div>
+          <div v-else class="text-sm text-muted-foreground">
+            {{ t("dataCompare.noSelectedDifferences") }}
           </div>
         </div>
 
@@ -990,7 +1384,7 @@ watch(
         </div>
       </div>
 
-      <DialogFooter v-if="!(hasResults && syncSql.trim())">
+      <DialogFooter v-if="!hasResults">
         <Button variant="outline" @click="open = false">{{ t("common.close") }}</Button>
         <span v-if="compareProgressLabel" class="text-xs text-muted-foreground self-center">{{
           compareProgressLabel
@@ -1002,14 +1396,28 @@ watch(
         </Button>
       </DialogFooter>
 
-      <DialogFooter v-if="hasResults && syncSql.trim()" class="flex items-center gap-2">
+      <DialogFooter v-else class="flex items-center gap-2">
+        <Button variant="outline" @click="open = false">{{ t("common.close") }}</Button>
         <span v-if="executing" class="text-xs text-muted-foreground mr-auto">
           {{ t("diff.syncProgress", { current: executedCount, total: executeTotal }) }}
         </span>
-        <Button variant="outline" size="sm" @click="copySql">
+        <span v-else-if="planningSync" class="text-xs text-muted-foreground mr-auto">
+          {{ t("dataCompare.planningSync") }}
+        </span>
+        <span v-else class="text-xs text-muted-foreground mr-auto">
+          {{
+            t("dataCompare.planSummary", {
+              inserts: syncPlan.insertCount,
+              updates: syncPlan.updateCount,
+              deletes: syncPlan.deleteCount,
+              statements: syncPlan.statementCount,
+            })
+          }}
+        </span>
+        <Button variant="outline" size="sm" :disabled="!syncPlan.syncSql.trim()" @click="copySql">
           <Copy class="w-3 h-3 mr-1" /> {{ t("diff.copySql") }}
         </Button>
-        <Button size="sm" :disabled="executing || syncStatements.length === 0" @click="executeSql">
+        <Button size="sm" :disabled="planningSync || executing || syncPlan.statementCount === 0" @click="executeSql">
           <Loader2 v-if="executing" class="w-3 h-3 animate-spin mr-1" />
           <Play v-else class="w-3 h-3 mr-1" />
           {{ t("diff.executeSync") }}

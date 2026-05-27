@@ -17,3 +17,9 @@ pub async fn prepare_data_compare_from_tables(
 ) -> Result<Json<dbx_core::data_compare::DataCompareFromTablesPreparation>, AppError> {
     dbx_core::data_compare::prepare_data_compare_from_tables(&state.app, options).await.map(Json).map_err(AppError)
 }
+
+pub async fn build_data_compare_sync_plan(
+    Json(options): Json<dbx_core::data_compare::DataCompareSyncPlanOptions>,
+) -> Json<dbx_core::data_compare::DataCompareSyncPlan> {
+    Json(dbx_core::data_compare::build_data_compare_sync_plan(options))
+}

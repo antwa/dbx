@@ -86,6 +86,8 @@ import type { BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions 
 import type {
   DataCompareFromTablesOptions,
   DataCompareFromTablesPreparation,
+  DataCompareSyncPlan,
+  DataCompareSyncPlanOptions,
   DataComparePreparation,
   DataComparePreparationOptions,
 } from "@/lib/dataCompare";
@@ -697,6 +699,10 @@ export async function prepareDataCompareFromTables(
   options: DataCompareFromTablesOptions,
 ): Promise<DataCompareFromTablesPreparation> {
   return post("/api/data-compare/prepare-from-tables", options);
+}
+
+export async function buildDataCompareSyncPlan(options: DataCompareSyncPlanOptions): Promise<DataCompareSyncPlan> {
+  return post("/api/data-compare/build-sync-plan", options);
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,8 @@ import type {
 import type {
   DataCompareFromTablesOptions,
   DataCompareFromTablesPreparation,
+  DataCompareSyncPlan,
+  DataCompareSyncPlanOptions,
   DataComparePreparation,
   DataComparePreparationOptions,
 } from "@/lib/dataCompare";
@@ -687,6 +689,10 @@ export async function prepareDataCompareFromTables(
   options: DataCompareFromTablesOptions,
 ): Promise<DataCompareFromTablesPreparation> {
   return invoke("prepare_data_compare_from_tables", { options });
+}
+
+export async function buildDataCompareSyncPlan(options: DataCompareSyncPlanOptions): Promise<DataCompareSyncPlan> {
+  return invoke("build_data_compare_sync_plan", { options });
 }
 
 export async function listIndexes(

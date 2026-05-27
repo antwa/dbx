@@ -55,7 +55,7 @@ export interface DataCompareFromTablesOptions {
   targetTable: string;
   columns: string[];
   keyColumns: string[];
-  rowLimit: number;
+  fetchBatchSize?: number;
 }
 
 export interface DataCompareFromTablesPreparation extends DataComparePreparation {
@@ -63,4 +63,26 @@ export interface DataCompareFromTablesPreparation extends DataComparePreparation
   targetRowCount: number;
   sourceTruncated: boolean;
   targetTruncated: boolean;
+}
+
+export interface DataCompareSyncPlanTableOptions {
+  tableName: string;
+  schema?: string;
+  columns: string[];
+  keyColumns: string[];
+  diff: DataCompareResult;
+  databaseType?: DatabaseType;
+}
+
+export interface DataCompareSyncPlanOptions {
+  tables: DataCompareSyncPlanTableOptions[];
+}
+
+export interface DataCompareSyncPlan {
+  insertCount: number;
+  updateCount: number;
+  deleteCount: number;
+  statementCount: number;
+  syncStatements: string[];
+  syncSql: string;
 }

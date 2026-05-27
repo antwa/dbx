@@ -193,6 +193,7 @@ async fn main() {
         .route("/query/build-database-sql-export", post(routes::query::build_database_sql_export))
         .route("/data-compare/prepare", post(routes::data_compare::prepare_data_compare))
         .route("/data-compare/prepare-from-tables", post(routes::data_compare::prepare_data_compare_from_tables))
+        .route("/data-compare/build-sync-plan", post(routes::data_compare::build_data_compare_sync_plan))
         .route("/query/cancel", post(routes::query::cancel_query))
         .route("/query/close-session", post(routes::query::close_query_session))
         .route("/query/close-client-session", post(routes::query::close_client_connection_session))

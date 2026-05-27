@@ -6,9 +6,7 @@ use serde_json::Value;
 use crate::connection::AppState;
 use crate::models::connection::DatabaseType;
 use crate::query::{execute_sql_statement_with_options, QueryExecutionOptions};
-use crate::sql_dialect::{
-    build_count_table_sql, build_table_select_sql, qualified_table_name, quote_table_identifier, TableSelectSqlOptions,
-};
+use crate::sql_dialect::{build_count_table_sql, qualified_table_name, quote_table_identifier, uses_fetch_first};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +48,8 @@ pub struct DataCompareFromTablesOptions {
     pub target_table: String,
     pub columns: Vec<String>,
     pub key_columns: Vec<String>,
-    pub row_limit: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_batch_size: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +96,37 @@ pub struct DataComparePreparation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DataCompareSyncPlanTableOptions {
+    pub table_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    pub columns: Vec<String>,
+    pub key_columns: Vec<String>,
+    pub diff: DataCompareResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_type: Option<DatabaseType>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataCompareSyncPlanOptions {
+    #[serde(default)]
+    pub tables: Vec<DataCompareSyncPlanTableOptions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataCompareSyncPlan {
+    pub insert_count: usize,
+    pub update_count: usize,
+    pub delete_count: usize,
+    pub statement_count: usize,
+    pub sync_statements: Vec<String>,
+    pub sync_sql: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DataCompareFromTablesPreparation {
     pub result: DataCompareResult,
     pub sync_statements: Vec<String>,
@@ -114,16 +144,17 @@ pub fn prepare_data_compare(options: DataComparePreparationOptions) -> Result<Da
         source_rows: options.source_rows,
         target_rows: options.target_rows,
     })?;
-    let sync_statements = generate_data_sync_statements(&GenerateDataSyncSqlOptions {
-        table_name: options.table_name,
-        schema: options.schema,
-        columns: options.columns,
-        key_columns: options.key_columns,
-        diff: result.clone(),
-        database_type: options.database_type,
+    let sync_plan = build_data_compare_sync_plan(DataCompareSyncPlanOptions {
+        tables: vec![DataCompareSyncPlanTableOptions {
+            table_name: options.table_name,
+            schema: options.schema,
+            columns: options.columns,
+            key_columns: options.key_columns,
+            diff: result.clone(),
+            database_type: options.database_type,
+        }],
     });
-    let sync_sql = sync_statements.join("\n");
-    Ok(DataComparePreparation { result, sync_statements, sync_sql })
+    Ok(DataComparePreparation { result, sync_statements: sync_plan.sync_statements, sync_sql: sync_plan.sync_sql })
 }
 
 pub async fn prepare_data_compare_from_tables(
@@ -132,7 +163,7 @@ pub async fn prepare_data_compare_from_tables(
 ) -> Result<DataCompareFromTablesPreparation, String> {
     let source_database_type = connection_database_type(state, &options.source_connection_id).await?;
     let target_database_type = connection_database_type(state, &options.target_connection_id).await?;
-    let row_limit = options.row_limit.max(1);
+    let fetch_batch_size = options.fetch_batch_size.unwrap_or(1000).max(1);
 
     let source_count_sql =
         build_count_table_sql(Some(source_database_type), Some(&options.source_schema), &options.source_table);
@@ -162,41 +193,28 @@ pub async fn prepare_data_compare_from_tables(
     let source_row_count = first_count(&source_count_result.rows)?;
     let target_row_count = first_count(&target_count_result.rows)?;
 
-    let source_sql = build_data_compare_select_sql(
-        source_database_type,
+    let source_rows = fetch_compare_rows(
+        state,
+        &options.source_connection_id,
+        &options.source_database,
         &options.source_schema,
         &options.source_table,
         &options.columns,
         &options.key_columns,
-        row_limit,
-    );
-    let target_sql = build_data_compare_select_sql(
-        target_database_type,
+        source_database_type,
+        fetch_batch_size,
+    )
+    .await?;
+    let target_rows = fetch_compare_rows(
+        state,
+        &options.target_connection_id,
+        &options.target_database,
         &options.target_schema,
         &options.target_table,
         &options.columns,
         &options.key_columns,
-        row_limit,
-    );
-
-    let source_result = execute_sql_statement_with_options(
-        state,
-        &options.source_connection_id,
-        &options.source_database,
-        &source_sql,
-        Some(&options.source_schema),
-        None,
-        QueryExecutionOptions { max_rows: Some(row_limit), ..Default::default() },
-    )
-    .await?;
-    let target_result = execute_sql_statement_with_options(
-        state,
-        &options.target_connection_id,
-        &options.target_database,
-        &target_sql,
-        Some(&options.target_schema),
-        None,
-        QueryExecutionOptions { max_rows: Some(row_limit), ..Default::default() },
+        target_database_type,
+        fetch_batch_size,
     )
     .await?;
 
@@ -205,8 +223,8 @@ pub async fn prepare_data_compare_from_tables(
         schema: Some(options.target_schema),
         columns: options.columns,
         key_columns: options.key_columns,
-        source_rows: source_result.rows,
-        target_rows: target_result.rows,
+        source_rows,
+        target_rows,
         database_type: Some(target_database_type),
     })?;
 
@@ -216,9 +234,34 @@ pub async fn prepare_data_compare_from_tables(
         sync_sql: preparation.sync_sql,
         source_row_count,
         target_row_count,
-        source_truncated: source_row_count > row_limit as u64,
-        target_truncated: target_row_count > row_limit as u64,
+        source_truncated: false,
+        target_truncated: false,
     })
+}
+
+pub fn build_data_compare_sync_plan(options: DataCompareSyncPlanOptions) -> DataCompareSyncPlan {
+    let mut sync_statements = Vec::new();
+    let mut insert_count = 0;
+    let mut update_count = 0;
+    let mut delete_count = 0;
+
+    for table in options.tables {
+        insert_count += table.diff.added.len();
+        update_count += table.diff.modified.len();
+        delete_count += table.diff.removed.len();
+        sync_statements.extend(generate_data_sync_statements(&GenerateDataSyncSqlOptions {
+            table_name: table.table_name,
+            schema: table.schema,
+            columns: table.columns,
+            key_columns: table.key_columns,
+            diff: table.diff,
+            database_type: table.database_type,
+        }));
+    }
+
+    let statement_count = sync_statements.len();
+    let sync_sql = sync_statements.join("\n");
+    DataCompareSyncPlan { insert_count, update_count, delete_count, statement_count, sync_statements, sync_sql }
 }
 
 pub fn compare_data_rows(options: CompareDataRowsOptions) -> Result<DataCompareResult, String> {
@@ -416,15 +459,103 @@ fn build_data_compare_select_sql(
     columns: &[String],
     key_columns: &[String],
     row_limit: usize,
+    offset: usize,
 ) -> String {
-    build_table_select_sql(TableSelectSqlOptions {
-        database_type: Some(database_type),
-        schema: Some(schema),
-        table_name,
-        columns,
-        order_columns: key_columns,
-        limit: row_limit,
-    })
+    let table = qualified_table_name(Some(database_type), Some(schema), table_name);
+    let select_columns = if columns.is_empty() {
+        "*".to_string()
+    } else {
+        columns.iter().map(|column| quote_table_identifier(Some(database_type), column)).collect::<Vec<_>>().join(", ")
+    };
+    let order_by = if key_columns.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " ORDER BY {}",
+            key_columns
+                .iter()
+                .map(|column| format!("{} ASC", quote_table_identifier(Some(database_type), column)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let order_expression = if key_columns.is_empty() {
+        "(SELECT NULL)".to_string()
+    } else {
+        key_columns
+            .iter()
+            .map(|column| format!("{} ASC", quote_table_identifier(Some(database_type), column)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if uses_fetch_first(database_type) {
+        let offset_sql = if offset > 0 { format!(" OFFSET {offset} ROWS") } else { String::new() };
+        return format!("SELECT {select_columns} FROM {table}{order_by}{offset_sql} FETCH FIRST {row_limit} ROWS ONLY");
+    }
+
+    if database_type == DatabaseType::SqlServer {
+        if offset == 0 {
+            return format!("SELECT TOP ({row_limit}) {select_columns} FROM {table}{order_by}");
+        }
+        let page_alias = quote_table_identifier(Some(DatabaseType::SqlServer), "dbx_page");
+        let row_number_alias = quote_table_identifier(Some(DatabaseType::SqlServer), "__dbx_row_num");
+        let end = offset + row_limit;
+        return format!(
+            "WITH {page_alias} AS (SELECT {select_columns}, ROW_NUMBER() OVER (ORDER BY {order_expression}) AS {row_number_alias} FROM {table}) SELECT {select_columns} FROM {page_alias} WHERE {row_number_alias} > {offset} AND {row_number_alias} <= {end} ORDER BY {row_number_alias}"
+        );
+    }
+
+    let offset_sql = if offset > 0 { format!(" OFFSET {offset}") } else { String::new() };
+    format!("SELECT {select_columns} FROM {table}{order_by} LIMIT {row_limit}{offset_sql};")
+}
+
+async fn fetch_compare_rows(
+    state: &AppState,
+    connection_id: &str,
+    database: &str,
+    schema: &str,
+    table_name: &str,
+    columns: &[String],
+    key_columns: &[String],
+    database_type: DatabaseType,
+    fetch_batch_size: usize,
+) -> Result<Vec<Vec<Value>>, String> {
+    let mut rows = Vec::new();
+    let mut offset = 0usize;
+
+    loop {
+        let sql = build_data_compare_select_sql(
+            database_type,
+            schema,
+            table_name,
+            columns,
+            key_columns,
+            fetch_batch_size,
+            offset,
+        );
+        let result = execute_sql_statement_with_options(
+            state,
+            connection_id,
+            database,
+            &sql,
+            Some(schema),
+            None,
+            QueryExecutionOptions { max_rows: Some(fetch_batch_size), ..Default::default() },
+        )
+        .await?;
+        let fetched = result.rows.len();
+        if fetched == 0 {
+            break;
+        }
+        rows.extend(result.rows);
+        if fetched < fetch_batch_size {
+            break;
+        }
+        offset += fetched;
+    }
+
+    Ok(rows)
 }
 
 fn where_by_key(
@@ -559,6 +690,49 @@ mod tests {
     }
 
     #[test]
+    fn builds_batch_sync_plan_from_selected_diffs() {
+        let plan = build_data_compare_sync_plan(DataCompareSyncPlanOptions {
+            tables: vec![DataCompareSyncPlanTableOptions {
+                table_name: "users".to_string(),
+                schema: Some("public".to_string()),
+                columns: vec!["id".to_string(), "name".to_string()],
+                key_columns: vec!["id".to_string()],
+                diff: DataCompareResult {
+                    added: vec![DataCompareRow {
+                        key: "1".to_string(),
+                        key_values: HashMap::from([(String::from("id"), json!(1))]),
+                        values: HashMap::from([(String::from("id"), json!(1)), (String::from("name"), json!("Ada"))]),
+                    }],
+                    removed: Vec::new(),
+                    modified: vec![DataCompareModifiedRow {
+                        key: "2".to_string(),
+                        key_values: HashMap::from([(String::from("id"), json!(2))]),
+                        source_values: HashMap::from([
+                            (String::from("id"), json!(2)),
+                            (String::from("name"), json!("Bob")),
+                        ]),
+                        target_values: HashMap::from([
+                            (String::from("id"), json!(2)),
+                            (String::from("name"), json!("Bobby")),
+                        ]),
+                        changes: vec![DataCompareChangedCell {
+                            column: "name".to_string(),
+                            source: json!("Bob"),
+                            target: json!("Bobby"),
+                        }],
+                    }],
+                },
+                database_type: Some(DatabaseType::Postgres),
+            }],
+        });
+
+        assert_eq!(plan.insert_count, 1);
+        assert_eq!(plan.update_count, 1);
+        assert_eq!(plan.delete_count, 0);
+        assert_eq!(plan.statement_count, 2);
+    }
+
+    #[test]
     fn requires_at_least_one_key_column() {
         let err = compare_data_rows(CompareDataRowsOptions {
             columns: vec!["id".to_string()],
@@ -594,6 +768,7 @@ mod tests {
                 &["id".to_string(), "name".to_string()],
                 &["id".to_string()],
                 1000,
+                0,
             ),
             "SELECT \"id\", \"name\" FROM \"public\".\"users\" ORDER BY \"id\" ASC LIMIT 1000;"
         );
@@ -609,6 +784,7 @@ mod tests {
                 &["id".to_string(), "name".to_string()],
                 &["id".to_string()],
                 50,
+                0,
             ),
             "SELECT TOP (50) [id], [name] FROM [dbo].[users] ORDER BY [id] ASC"
         );
@@ -616,23 +792,22 @@ mod tests {
 
     #[test]
     fn shared_sql_dialect_helpers_build_data_compare_table_sql() {
-        use crate::sql_dialect::{
-            build_count_table_sql as build_shared_count_table_sql, build_table_select_sql, TableSelectSqlOptions,
-        };
+        use crate::sql_dialect::build_count_table_sql as build_shared_count_table_sql;
 
         assert_eq!(
             build_shared_count_table_sql(Some(DatabaseType::Postgres), Some("public"), "users"),
             "SELECT COUNT(*) AS row_count FROM \"public\".\"users\""
         );
         assert_eq!(
-            build_table_select_sql(TableSelectSqlOptions {
-                database_type: Some(DatabaseType::Oracle),
-                schema: Some("APP"),
-                table_name: "EVENTS",
-                columns: &["ID".to_string(), "NAME".to_string()],
-                order_columns: &["ID".to_string()],
-                limit: 25,
-            }),
+            build_data_compare_select_sql(
+                DatabaseType::Oracle,
+                "APP",
+                "EVENTS",
+                &["ID".to_string(), "NAME".to_string()],
+                &["ID".to_string()],
+                25,
+                0,
+            ),
             "SELECT \"ID\", \"NAME\" FROM \"APP\".\"EVENTS\" ORDER BY \"ID\" ASC FETCH FIRST 25 ROWS ONLY"
         );
     }
