@@ -8,13 +8,13 @@ use commands::connection::AppState;
 use dbx_core::storage::Storage;
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri::{
     menu::MenuBuilder,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
-#[cfg(target_os = "macos")]
-use tauri::{Emitter, RunEvent};
+use tauri::{Emitter, Manager};
 #[cfg(any(windows, target_os = "linux"))]
 use tauri_plugin_deep_link::DeepLinkExt;
 

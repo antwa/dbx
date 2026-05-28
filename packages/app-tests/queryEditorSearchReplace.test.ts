@@ -14,7 +14,7 @@ test("query editor opens search and replace with configurable shortcuts", () => 
   assert.match(source, /shortcutToCodeMirrorKey\(shortcuts\.find\)/);
   assert.match(source, /shortcutToCodeMirrorKey\(shortcuts\.replace\)/);
   assert.match(source, /run:\s*openReplace/);
-  assert.match(source, /defineExpose\(\{\s*openSearch,\s*openReplace\s*\}\)/);
+  assert.match(source, /defineExpose\(\{\s*openSearch,\s*openReplace,\s*scrollCursorIntoView\s*\}\)/);
   assert.match(searchPanelSource, /showReplace\.value\s*=\s*true/);
   assert.match(searchPanelSource, /replaceInputRef\.value\?\.focus\(\)/);
   assert.match(searchPanelSource, /defineExpose\(\{\s*openSearch,\s*openReplace,\s*closeSearch\s*\}\)/);
