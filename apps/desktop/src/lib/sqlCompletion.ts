@@ -1942,12 +1942,17 @@ function buildSnippetItems(prefix: string, snippets: SqlSnippet[]): SqlCompletio
     .map((snippet) => {
       const boostByPrefix = computeBoost(snippet.prefix, prefix);
       const boostByLabel = computeBoost(snippet.label, prefix);
+      const matchesByPrefix = matchesPrefix(snippet.prefix, prefix);
+      // When the user types past the snippet prefix (e.g. "sele" vs prefix "sel"),
+      // they are likely typing the actual keyword — reduce the base boost so
+      // the real keyword can rank higher.
+      const baseBoost = matchesByPrefix ? 4000 : 0;
       return {
         label: snippet.label,
         type: "snippet" as const,
         detail: snippet.body,
         apply: snippet.body,
-        boost: Math.max(boostByPrefix, boostByLabel) + 4000,
+        boost: Math.max(boostByPrefix, boostByLabel) + baseBoost,
       };
     });
 }

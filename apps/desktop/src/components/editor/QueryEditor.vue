@@ -716,6 +716,36 @@ async function formatCurrentSql() {
 }
 
 let completionEpoch = 0;
+let completionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function buildCompletionResult(
+  items: ReturnType<typeof buildSqlCompletionItemsFromContext>,
+  position: number,
+  prefixLength: number,
+  fullDoc: string,
+) {
+  if (items.length === 0) return null;
+  return {
+    from: position - prefixLength,
+    filter: false,
+    options: items.map((item) =>
+      (item.type === "snippet" || item.type === "function") && item.apply
+        ? codeMirrorSnippetCompletion(item.apply, {
+            label: item.label,
+            type: item.type,
+            detail: item.detail,
+            boost: item.boost,
+          })
+        : {
+            label: item.label,
+            type: item.type,
+            detail: item.detail,
+            boost: item.boost,
+          },
+    ),
+    validFor: getSqlCompletionResultValidFor(fullDoc, position),
+  };
+}
 
 async function provideSqlCompletions(
   currentState: import("@codemirror/state").EditorState,
@@ -741,234 +771,239 @@ async function provideSqlCompletions(
         translations: completionTranslations.value,
         snippets: settingsStore.editorSettings.snippets,
       });
-      if (items.length === 0) return null;
-      return {
-        from: position - completionContext.prefix.length,
-        filter: false,
-        options: items.map((item) =>
-          (item.type === "snippet" || item.type === "function") && item.apply
-            ? codeMirrorSnippetCompletion(item.apply, {
-                label: item.label,
-                type: item.type,
-                detail: item.detail,
-                boost: item.boost,
-              })
-            : {
-                label: item.label,
-                type: item.type,
-                detail: item.detail,
-                boost: item.boost,
-              },
-        ),
-        validFor: getSqlCompletionResultValidFor(fullDoc, position),
-      };
+      return buildCompletionResult(items, position, completionContext.prefix.length, fullDoc);
     }
 
-    // Handle INSERT column list: fetch columns for the target table
-    let insertColumnsByTable = new Map<string, SqlCompletionColumn[]>();
-    if (completionContext.insertTable) {
-      try {
-        const insertCols = await connectionStore.listCompletionColumns(
-          props.connectionId,
-          props.database,
-          completionContext.insertTable,
-          completionContext.insertSchema,
-        );
-        if (epoch !== completionEpoch) return null;
-        if (insertCols.length > 0) {
-          const insertKey = completionContext.insertSchema
-            ? `${completionContext.insertSchema}.${completionContext.insertTable}`
-            : completionContext.insertTable;
-          insertColumnsByTable.set(insertKey, insertCols);
-        }
-      } catch {
-        // ignore
-      }
-    }
+    const needsAsyncData =
+      completionContext.suggestTables ||
+      !!completionContext.qualifier ||
+      !!completionContext.insertTable ||
+      completionContext.exclusiveColumnSuggestions ||
+      completionContext.referencedTables.length > 0;
 
-    const shouldLoadTables = completionContext.suggestTables || !!completionContext.qualifier;
-    let tables = shouldLoadTables
-      ? await connectionStore.listCompletionTables(
-          props.connectionId,
-          props.database,
-          completionContext.qualifier || completionContext.prefix,
-          MAX_COMPLETION_TABLES,
-        )
-      : cachedTables;
-    if (epoch !== completionEpoch) return null;
-
-    // Fetch schemas for schema completion (only in table-suggesting context without qualifier)
-    let schemaNames: string[] = [];
-    if (completionContext.suggestTables && !completionContext.qualifier && !completionContext.insertTable) {
-      try {
-        schemaNames = await api.listSchemas(props.connectionId, props.database);
-        if (epoch !== completionEpoch) return null;
-      } catch {
-        // ignore
-      }
-    }
-
-    // If qualifier didn't match any table names, try it as a schema name
-    let qualifierIsSchema = false;
-    if (
-      completionContext.qualifier &&
-      tables.length === 0 &&
-      (completionContext.suggestTables || completionContext.exclusiveColumnSuggestions)
-    ) {
-      const schemaTables = await connectionStore.listCompletionTables(
-        props.connectionId,
-        props.database,
-        completionContext.prefix,
-        MAX_COMPLETION_TABLES,
-        completionContext.qualifier,
-      );
-      if (schemaTables.length > 0) {
-        tables = schemaTables;
-        qualifierIsSchema = true;
-      }
-      if (epoch !== completionEpoch) return null;
-    }
-
-    // Collect referenced tables — enrich with schema from filtered table lookup
-    let refs = completionContext.referencedTables.map((rt) => {
-      if (!rt.schema) {
-        const cached = tables.find((t) => t.name.toLowerCase() === rt.name.toLowerCase());
-        if (cached && cached.schema) {
-          return { ...rt, schema: cached.schema };
-        }
-      }
-      return rt;
-    });
-    const unresolvedRefs = refs.filter((rt) => !rt.schema && !rt.columns);
-    if (unresolvedRefs.length > 0) {
-      const lookupGroups = await Promise.all(
-        unresolvedRefs.map((rt) =>
-          connectionStore.listCompletionTables(props.connectionId!, props.database!, rt.name, 20),
-        ),
-      );
-      if (epoch !== completionEpoch) return null;
-      const lookupTables = lookupGroups.flat();
-      refs = refs.map((rt) => {
-        if (rt.schema || rt.columns) return rt;
-        const matched = lookupTables.find((table) => table.name.toLowerCase() === rt.name.toLowerCase());
-        return matched?.schema ? { ...rt, schema: matched.schema } : rt;
+    if (!needsAsyncData) {
+      const items = buildSqlCompletionItemsFromContext(completionContext, {
+        tables: [],
+        columnsByTable: new Map(),
+        schemas: [],
+        translations: completionTranslations.value,
+        snippets: settingsStore.editorSettings.snippets,
       });
+      return buildCompletionResult(items, position, completionContext.prefix.length, fullDoc);
     }
 
-    // If no referenced tables but qualifier exists, infer table from tables list
-    if (refs.length === 0 && completionContext.qualifier) {
-      const q = completionContext.qualifier.toLowerCase();
-      const matched = tables.filter((t) => t.name.toLowerCase() === q || t.name.toLowerCase().endsWith("." + q));
-      refs = matched.map((t) => ({ name: t.name, schema: t.schema }));
+    // Cancel any pending debounced completion
+    if (completionDebounceTimer) {
+      clearTimeout(completionDebounceTimer);
+      completionDebounceTimer = null;
     }
 
-    // Populate CTE columns from parsed definitions (no backend call needed)
-    const cteDefs = extractCteDefinitions(fullDoc);
-    for (const refTable of refs) {
-      if (refTable.columns) continue; // Already has columns from CTE parsing
-      const cteDef = cteDefs.find((c) => c.name.toLowerCase() === refTable.name.toLowerCase());
-      if (cteDef) {
-        refTable.columns = cteDef.columns;
-      }
-    }
-
-    await Promise.all(
-      refs.map(async (refTable) => {
-        // Skip backend fetch if columns already provided by CTE parsing
-        if (refTable.columns && refTable.columns.length > 0) return;
-        const cacheKey = refTable.schema ? `${refTable.schema}.${refTable.name}` : refTable.name;
-        if (cachedColumnsByTable.has(cacheKey)) {
+    // Debounce the full async flow and return the promise to CodeMirror.
+    // This prevents wasted backend calls during rapid typing while still
+    // showing table/column names in the first popup.
+    return new Promise<ReturnType<typeof buildCompletionResult>>((resolve) => {
+      completionDebounceTimer = setTimeout(async () => {
+        completionDebounceTimer = null;
+        if (epoch !== completionEpoch) {
+          resolve(null);
           return;
         }
         try {
-          const columns = await connectionStore.listCompletionColumns(
-            props.connectionId!,
-            props.database!,
-            refTable.name,
-            refTable.schema,
-          );
-          if (epoch !== completionEpoch) return;
-          if (columns.length === 0) return;
-          cachedColumnsByTable.set(cacheKey, columns);
-        } catch (e) {
-          console.error(`[DBX] Failed to load columns for ${cacheKey}:`, e);
+          const result = await performAsyncCompletionWithResult(epoch, completionContext, fullDoc, position);
+          resolve(result);
+        } catch {
+          resolve(null);
         }
-      }),
-    );
-    if (epoch !== completionEpoch) return null;
-
-    // Build columnsByTable — from cache or CTE definitions
-    const columnsByTable = new Map<string, SqlCompletionColumn[]>();
-    if (insertColumnsByTable.size > 0) {
-      for (const [key, cols] of insertColumnsByTable.entries()) {
-        columnsByTable.set(key, cols);
-      }
-    } else {
-      for (const refTable of refs) {
-        // Use CTE columns if available
-        if (refTable.columns && refTable.columns.length > 0) {
-          const key = refTable.name;
-          columnsByTable.set(
-            key,
-            refTable.columns.map((name) => ({
-              name,
-              table: refTable.name,
-              dataType: undefined,
-            })),
-          );
-          continue;
-        }
-        const cacheKey = refTable.schema ? `${refTable.schema}.${refTable.name}` : refTable.name;
-        const cached = cachedColumnsByTable.get(cacheKey);
-        if (cached) {
-          columnsByTable.set(cacheKey, cached);
-        }
-      }
-    }
-
-    const effectiveContext = qualifierIsSchema
-      ? {
-          ...completionContext,
-          qualifier: undefined,
-          suggestTables: true,
-          suggestColumns: false,
-          exclusiveColumnSuggestions: false,
-        }
-      : completionContext;
-
-    const items = buildSqlCompletionItemsFromContext(effectiveContext, {
-      tables,
-      columnsByTable,
-      schemas: schemaNames,
-      translations: completionTranslations.value,
-      snippets: settingsStore.editorSettings.snippets,
+      }, 150);
     });
-
-    if (items.length === 0) return null;
-
-    return {
-      from: position - completionContext.prefix.length,
-      filter: false,
-      options: items.map((item) =>
-        (item.type === "snippet" || item.type === "function") && item.apply
-          ? codeMirrorSnippetCompletion(item.apply, {
-              label: item.label,
-              type: item.type,
-              detail: item.detail,
-              boost: item.boost,
-            })
-          : {
-              label: item.label,
-              type: item.type,
-              detail: item.detail,
-              boost: item.boost,
-            },
-      ),
-      validFor: getSqlCompletionResultValidFor(fullDoc, position),
-    };
   } catch {
     return null;
   }
+}
+
+async function performAsyncCompletionWithResult(
+  epoch: number,
+  completionContext: ReturnType<typeof getSqlCompletionContext>,
+  fullDoc: string,
+  position: number,
+) {
+  // Handle INSERT column list: fetch columns for the target table
+  let insertColumnsByTable = new Map<string, SqlCompletionColumn[]>();
+  if (completionContext.insertTable) {
+    try {
+      const insertCols = await connectionStore.listCompletionColumns(
+        props.connectionId!,
+        props.database!,
+        completionContext.insertTable,
+        completionContext.insertSchema,
+      );
+      if (epoch !== completionEpoch) return null;
+      if (insertCols.length > 0) {
+        const insertKey = completionContext.insertSchema
+          ? `${completionContext.insertSchema}.${completionContext.insertTable}`
+          : completionContext.insertTable;
+        insertColumnsByTable.set(insertKey, insertCols);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const shouldLoadTables = completionContext.suggestTables || !!completionContext.qualifier;
+  let tables = shouldLoadTables
+    ? await connectionStore.listCompletionTables(
+        props.connectionId!,
+        props.database!,
+        completionContext.qualifier || completionContext.prefix,
+        MAX_COMPLETION_TABLES,
+      )
+    : cachedTables;
+  if (epoch !== completionEpoch) return null;
+
+  // Fetch schemas for schema completion
+  let schemaNames: string[] = [];
+  if (completionContext.suggestTables && !completionContext.qualifier && !completionContext.insertTable) {
+    try {
+      schemaNames = await connectionStore.listCompletionSchemas(props.connectionId!, props.database!);
+      if (epoch !== completionEpoch) return null;
+    } catch {
+      // ignore
+    }
+  }
+
+  // If qualifier didn't match any table names, try it as a schema name
+  let qualifierIsSchema = false;
+  if (
+    completionContext.qualifier &&
+    tables.length === 0 &&
+    (completionContext.suggestTables || completionContext.exclusiveColumnSuggestions)
+  ) {
+    const schemaTables = await connectionStore.listCompletionTables(
+      props.connectionId!,
+      props.database!,
+      completionContext.prefix,
+      MAX_COMPLETION_TABLES,
+      completionContext.qualifier,
+    );
+    if (schemaTables.length > 0) {
+      tables = schemaTables;
+      qualifierIsSchema = true;
+    }
+    if (epoch !== completionEpoch) return null;
+  }
+
+  // Collect referenced tables — enrich with schema from filtered table lookup
+  let refs = completionContext.referencedTables.map((rt) => {
+    if (!rt.schema) {
+      const cached = tables.find((t) => t.name.toLowerCase() === rt.name.toLowerCase());
+      if (cached && cached.schema) {
+        return { ...rt, schema: cached.schema };
+      }
+    }
+    return rt;
+  });
+  const unresolvedRefs = refs.filter((rt) => !rt.schema && !rt.columns);
+  if (unresolvedRefs.length > 0) {
+    const lookupGroups = await Promise.all(
+      unresolvedRefs.map((rt) =>
+        connectionStore.listCompletionTables(props.connectionId!, props.database!, rt.name, 20),
+      ),
+    );
+    if (epoch !== completionEpoch) return null;
+    const lookupTables = lookupGroups.flat();
+    refs = refs.map((rt) => {
+      if (rt.schema || rt.columns) return rt;
+      const matched = lookupTables.find((table) => table.name.toLowerCase() === rt.name.toLowerCase());
+      return matched?.schema ? { ...rt, schema: matched.schema } : rt;
+    });
+  }
+
+  // If no referenced tables but qualifier exists, infer table from tables list
+  if (refs.length === 0 && completionContext.qualifier) {
+    const q = completionContext.qualifier.toLowerCase();
+    const matched = tables.filter((t) => t.name.toLowerCase() === q || t.name.toLowerCase().endsWith("." + q));
+    refs = matched.map((t) => ({ name: t.name, schema: t.schema }));
+  }
+
+  // Populate CTE columns from parsed definitions
+  const cteDefs = extractCteDefinitions(fullDoc);
+  for (const refTable of refs) {
+    if (refTable.columns) continue;
+    const cteDef = cteDefs.find((c) => c.name.toLowerCase() === refTable.name.toLowerCase());
+    if (cteDef) {
+      refTable.columns = cteDef.columns;
+    }
+  }
+
+  await Promise.all(
+    refs.map(async (refTable) => {
+      if (refTable.columns && refTable.columns.length > 0) return;
+      const cacheKey = refTable.schema ? `${refTable.schema}.${refTable.name}` : refTable.name;
+      if (cachedColumnsByTable.has(cacheKey)) return;
+      try {
+        const columns = await connectionStore.listCompletionColumns(
+          props.connectionId!,
+          props.database!,
+          refTable.name,
+          refTable.schema,
+        );
+        if (epoch !== completionEpoch) return;
+        if (columns.length === 0) return;
+        cachedColumnsByTable.set(cacheKey, columns);
+      } catch (e) {
+        console.error(`[DBX] Failed to load columns for ${cacheKey}:`, e);
+      }
+    }),
+  );
+  if (epoch !== completionEpoch) return null;
+
+  // Build columnsByTable — from cache or CTE definitions
+  const columnsByTable = new Map<string, SqlCompletionColumn[]>();
+  if (insertColumnsByTable.size > 0) {
+    for (const [key, cols] of insertColumnsByTable.entries()) {
+      columnsByTable.set(key, cols);
+    }
+  } else {
+    for (const refTable of refs) {
+      if (refTable.columns && refTable.columns.length > 0) {
+        const key = refTable.name;
+        columnsByTable.set(
+          key,
+          refTable.columns.map((name) => ({
+            name,
+            table: refTable.name,
+            dataType: undefined,
+          })),
+        );
+        continue;
+      }
+      const cacheKey = refTable.schema ? `${refTable.schema}.${refTable.name}` : refTable.name;
+      const cached = cachedColumnsByTable.get(cacheKey);
+      if (cached) {
+        columnsByTable.set(cacheKey, cached);
+      }
+    }
+  }
+
+  const effectiveContext = qualifierIsSchema
+    ? {
+        ...completionContext,
+        qualifier: undefined,
+        suggestTables: true,
+        suggestColumns: false,
+        exclusiveColumnSuggestions: false,
+      }
+    : completionContext;
+
+  const items = buildSqlCompletionItemsFromContext(effectiveContext, {
+    tables,
+    columnsByTable,
+    schemas: schemaNames,
+    translations: completionTranslations.value,
+    snippets: settingsStore.editorSettings.snippets,
+  });
+
+  return buildCompletionResult(items, position, completionContext.prefix.length, fullDoc);
 }
 
 async function refreshCompletionCache() {

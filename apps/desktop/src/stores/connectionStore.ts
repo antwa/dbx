@@ -84,6 +84,7 @@ export const useConnectionStore = defineStore("connection", () => {
   const newConnectionGroupId = ref<string | null>(null);
   const completionTablesCache = ref<Record<string, SqlCompletionTable[]>>({});
   const completionColumnsCache = ref<Record<string, ColumnInfo[]>>({});
+  const schemaListCache = ref<Record<string, string[]>>({});
   const transferSource = ref<{ connectionId: string; database: string } | null>(null);
   const schemaDiffSource = ref<{ connectionId: string; database: string; schema?: string } | null>(null);
   const dataCompareSource = ref<{
@@ -514,6 +515,9 @@ export const useConnectionStore = defineStore("connection", () => {
     }
     for (const key of Object.keys(completionColumnsCache.value)) {
       if (key.startsWith(cachePrefix)) delete completionColumnsCache.value[key];
+    }
+    for (const key of Object.keys(schemaListCache.value)) {
+      if (key.startsWith(cachePrefix)) delete schemaListCache.value[key];
     }
   }
 
@@ -1358,6 +1362,16 @@ export const useConnectionStore = defineStore("connection", () => {
     }
   }
 
+  async function listCompletionSchemas(connectionId: string, database: string): Promise<string[]> {
+    const cacheKey = `${connectionId}:${database}`;
+    if (schemaListCache.value[cacheKey]) {
+      return schemaListCache.value[cacheKey];
+    }
+    const schemas = await api.listSchemas(connectionId, database);
+    schemaListCache.value[cacheKey] = schemas;
+    return schemas;
+  }
+
   async function listCompletionTables(
     connectionId: string,
     database: string,
@@ -1374,25 +1388,31 @@ export const useConnectionStore = defineStore("connection", () => {
     await ensureConnected(connectionId);
 
     if (isSchemaAwareDatabase(connectionId)) {
-      const schemas = schema ? [schema] : await api.listSchemas(connectionId, database);
+      const schemas = schema ? [schema] : await listCompletionSchemas(connectionId, database);
       if (normalizedFilter || limit) {
-        const limitedTables: SqlCompletionTable[] = [];
-        for (const schema of schemas) {
-          try {
-            const remaining = limit ? Math.max(limit - limitedTables.length, 0) : undefined;
-            if (remaining === 0) break;
-            const tables = await api.listTables(connectionId, database, schema, normalizedFilter, remaining);
-            limitedTables.push(
-              ...tables.map((table) => ({
-                name: table.name,
-                schema,
-                type: table.table_type === "VIEW" ? ("view" as const) : ("table" as const),
-              })),
-            );
-          } catch {
-            /* ignore schema failures */
+        const batchSize = 5;
+        const results: SqlCompletionTable[] = [];
+        for (let i = 0; i < schemas.length && results.length < (limit ?? Infinity); i += batchSize) {
+          const batch = schemas.slice(i, i + batchSize);
+          const batchResults = await Promise.all(
+            batch.map(async (s) => {
+              try {
+                const tables = await api.listTables(connectionId, database, s, normalizedFilter, limit);
+                return tables.map((table) => ({
+                  name: table.name,
+                  schema: s,
+                  type: table.table_type === "VIEW" ? ("view" as const) : ("table" as const),
+                })) as SqlCompletionTable[];
+              } catch {
+                return [] as SqlCompletionTable[];
+              }
+            }),
+          );
+          for (const group of batchResults) {
+            results.push(...group);
           }
         }
+        const limitedTables = limit ? results.slice(0, limit) : results;
         completionTablesCache.value[cacheKey] = limitedTables;
         evictOldestCacheEntries(completionTablesCache.value, COMPLETION_CACHE_MAX);
         return completionTablesCache.value[cacheKey];
@@ -1830,6 +1850,7 @@ export const useConnectionStore = defineStore("connection", () => {
     loadTriggers,
     listCompletionTables,
     listCompletionColumns,
+    listCompletionSchemas,
     exportConnectionsToFile,
     readImportFile,
     importConnectionsFromFile,
