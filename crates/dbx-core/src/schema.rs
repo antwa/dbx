@@ -1,6 +1,7 @@
 use crate::connection::{AppState, MysqlMode, PoolKind};
 use crate::db;
 use crate::models::connection::DatabaseType;
+use std::future::Future;
 
 macro_rules! extract_pool {
     ($connections:expr, $key:expr, $variant:ident) => {
@@ -242,6 +243,10 @@ fn clickhouse_metadata_database<'a>(database: &'a str, schema: &'a str) -> &'a s
 }
 
 pub async fn list_databases_core(state: &AppState, connection_id: &str) -> Result<Vec<db::DatabaseInfo>, String> {
+    retry_metadata_connection(state, connection_id, None, || list_databases_once(state, connection_id)).await
+}
+
+async fn list_databases_once(state: &AppState, connection_id: &str) -> Result<Vec<db::DatabaseInfo>, String> {
     log::info!("[list_databases] connection_id={connection_id}");
     {
         let connections = state.connections.read().await;
@@ -292,6 +297,13 @@ pub async fn list_databases_core(state: &AppState, connection_id: &str) -> Resul
 }
 
 pub async fn list_schemas_core(state: &AppState, connection_id: &str, database: &str) -> Result<Vec<String>, String> {
+    retry_metadata_connection(state, connection_id, Some(database), || {
+        list_schemas_once(state, connection_id, database)
+    })
+    .await
+}
+
+async fn list_schemas_once(state: &AppState, connection_id: &str, database: &str) -> Result<Vec<String>, String> {
     let pool_key = state.get_or_create_pool(connection_id, Some(database)).await?;
 
     {
@@ -326,6 +338,20 @@ pub async fn list_schemas_core(state: &AppState, connection_id: &str, database: 
 }
 
 pub async fn list_tables_core(
+    state: &AppState,
+    connection_id: &str,
+    database: &str,
+    schema: &str,
+    filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<db::TableInfo>, String> {
+    retry_metadata_connection(state, connection_id, Some(database), || {
+        list_tables_once(state, connection_id, database, schema, filter, limit)
+    })
+    .await
+}
+
+async fn list_tables_once(
     state: &AppState,
     connection_id: &str,
     database: &str,
@@ -470,6 +496,18 @@ pub async fn list_objects_core(
     database: &str,
     schema: &str,
 ) -> Result<Vec<db::ObjectInfo>, String> {
+    retry_metadata_connection(state, connection_id, Some(database), || {
+        list_objects_once(state, connection_id, database, schema)
+    })
+    .await
+}
+
+async fn list_objects_once(
+    state: &AppState,
+    connection_id: &str,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<db::ObjectInfo>, String> {
     let pool_key = state.get_or_create_pool(connection_id, Some(database)).await?;
 
     {
@@ -537,6 +575,26 @@ pub async fn list_objects_core(
                 })
                 .collect())
         }
+    }
+}
+
+async fn retry_metadata_connection<T, F, Fut>(
+    state: &AppState,
+    connection_id: &str,
+    database: Option<&str>,
+    mut operation: F,
+) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, String>>,
+{
+    let result = operation().await;
+    match result {
+        Err(error) if crate::query::is_connection_error(&error) => {
+            state.reconnect_pool(connection_id, database).await?;
+            operation().await
+        }
+        _ => result,
     }
 }
 
