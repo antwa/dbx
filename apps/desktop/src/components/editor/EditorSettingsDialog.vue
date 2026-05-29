@@ -964,9 +964,9 @@ watch(
         </DialogTitle>
       </DialogHeader>
 
-      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden sm:min-h-[520px] sm:flex-row">
+      <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden sm:flex-row">
         <nav
-          class="settingsCategoryNav flex shrink-0 gap-1 overflow-x-auto border-b pb-3 sm:w-40 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3"
+          class="settingsCategoryNav flex min-h-0 shrink-0 gap-1 overflow-x-auto border-b pb-3 sm:w-40 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:pb-0 sm:pr-3"
         >
           <button
             v-for="category in settingsCategoryNav"
