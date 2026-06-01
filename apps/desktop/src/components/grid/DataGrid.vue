@@ -5130,7 +5130,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                     :style="{ height: '30px', width: `${transposeTotalWidth}px` }"
                   >
                     <div
-                      class="sticky left-0 z-10 shrink-0 border-r border-border bg-background px-3 py-1.5 font-medium truncate"
+                      class="sticky left-0 z-10 flex shrink-0 items-center border-r border-border bg-background px-3 py-0 font-medium truncate"
                       :style="{ width: `${transposePinnedWidth}px` }"
                       :title="item.column"
                     >
@@ -5140,7 +5140,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                     <div
                       v-for="cell in item.values"
                       :key="`${item.id}:${cell.recordIndex}`"
-                      class="relative shrink-0 border-r border-border/70 px-2 py-1.5 font-mono truncate"
+                      class="relative flex shrink-0 items-center border-r border-border/70 px-2 py-0 font-mono truncate"
                       :class="{
                         'text-muted-foreground italic': cell.isNull,
                         'cell-selected':
@@ -5192,6 +5192,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                           v-if="temporalEditorKindForColumn(cell.valueIndex)"
                           v-model="editValue"
                           :kind="temporalEditorKindForColumn(cell.valueIndex)!"
+                          cell-layout="transpose"
                           @cancel="cancelEdit"
                           @commit="commitGridEdit"
                         />
@@ -5201,7 +5202,7 @@ const gridContextMenuItems = computed<ContextMenuItem[]>(() => {
                           autocapitalize="off"
                           autocorrect="off"
                           spellcheck="false"
-                          class="cell-edit-input absolute inset-0 bg-background border-2 border-primary px-2 py-0 text-xs leading-[26px] outline-none z-10"
+                          class="cell-edit-input absolute inset-0 bg-background border-2 border-primary px-1.5 py-0 text-xs leading-[26px] outline-none z-10"
                           @blur="commitEdit"
                           @click.stop
                           @keydown.stop="onEditKeydown"
