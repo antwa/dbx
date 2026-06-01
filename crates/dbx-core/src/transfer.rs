@@ -13,6 +13,10 @@ use crate::sql::starts_with_executable_sql_keyword;
 static CANCELLED: std::sync::LazyLock<RwLock<HashSet<String>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashSet::new()));
 
+const MAX_TRANSFER_WRITE_SQL_BYTES: usize = 512 * 1024;
+const MAX_SQLSERVER_INSERT_ROWS: usize = 1000;
+const MAX_ORACLE_MERGE_ROWS: usize = 500;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum TransferMode {
@@ -1111,6 +1115,88 @@ pub fn generate_upsert_typed(
     }
 }
 
+fn max_transfer_write_rows(db_type: &DatabaseType, mode: &TransferMode) -> usize {
+    match (db_type, mode) {
+        (DatabaseType::SqlServer, TransferMode::Append | TransferMode::Overwrite) => MAX_SQLSERVER_INSERT_ROWS,
+        (DatabaseType::Oracle, TransferMode::Upsert) => MAX_ORACLE_MERGE_ROWS,
+        _ => usize::MAX,
+    }
+}
+
+fn generate_transfer_write_sql(
+    mode: &TransferMode,
+    columns: &[String],
+    column_types: &[Option<String>],
+    rows: &[Vec<serde_json::Value>],
+    table: &str,
+    schema: &str,
+    db_type: &DatabaseType,
+    pk_columns: &[String],
+) -> String {
+    match mode {
+        TransferMode::Upsert => generate_upsert_typed(columns, column_types, rows, table, schema, db_type, pk_columns),
+        _ => generate_insert_typed(columns, column_types, rows, table, schema, db_type),
+    }
+}
+
+fn generate_transfer_write_sql_batches(
+    mode: &TransferMode,
+    columns: &[String],
+    column_types: &[Option<String>],
+    rows: &[Vec<serde_json::Value>],
+    table: &str,
+    schema: &str,
+    db_type: &DatabaseType,
+    pk_columns: &[String],
+) -> Vec<String> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let max_rows = max_transfer_write_rows(db_type, mode);
+    let mut statements = Vec::new();
+    let mut start = 0;
+
+    while start < rows.len() {
+        let mut end = start + 1;
+        let mut accepted = generate_transfer_write_sql(
+            mode,
+            columns,
+            column_types,
+            &rows[start..end],
+            table,
+            schema,
+            db_type,
+            pk_columns,
+        );
+
+        while end < rows.len() && end - start < max_rows {
+            let candidate = generate_transfer_write_sql(
+                mode,
+                columns,
+                column_types,
+                &rows[start..=end],
+                table,
+                schema,
+                db_type,
+                pk_columns,
+            );
+            if candidate.len() > MAX_TRANSFER_WRITE_SQL_BYTES && !accepted.is_empty() {
+                break;
+            }
+            accepted = candidate;
+            end += 1;
+        }
+
+        if !accepted.is_empty() {
+            statements.push(accepted);
+        }
+        start = end;
+    }
+
+    statements
+}
+
 pub fn pagination_sql(
     columns: &[String],
     table: &str,
@@ -2010,29 +2096,24 @@ where
             break;
         }
 
-        let batch_sql = match effective_mode {
-            TransferMode::Upsert => generate_upsert_typed(
-                &col_names,
-                &col_types,
-                &result.rows,
-                table,
-                &request.target_schema,
-                target_db_type,
-                &pk_columns,
-            ),
-            _ => generate_insert_typed(
-                &col_names,
-                &col_types,
-                &result.rows,
-                table,
-                &request.target_schema,
-                target_db_type,
-            ),
-        };
-        if !batch_sql.is_empty() {
-            execute_on_pool(state, target_pool_key, &batch_sql)
-                .await
-                .map_err(|e| format!("Insert failed at offset {offset}: {e}"))?;
+        let write_statements = generate_transfer_write_sql_batches(
+            &effective_mode,
+            &col_names,
+            &col_types,
+            &result.rows,
+            table,
+            &request.target_schema,
+            target_db_type,
+            &pk_columns,
+        );
+        for (statement_index, batch_sql) in write_statements.iter().enumerate() {
+            execute_on_pool(state, target_pool_key, batch_sql).await.map_err(|e| {
+                format!(
+                    "Insert failed at offset {offset}, chunk {} of {}: {e}",
+                    statement_index + 1,
+                    write_statements.len()
+                )
+            })?;
         }
 
         total_transferred += row_count as u64;
@@ -2846,6 +2927,41 @@ mod tests {
             sql,
             "INSERT INTO `policies` (`dt`, `raw_text`, `d`, `t`) VALUES\n('2026-05-12 00:00:00', '2026-05-12T00:00:00+00:00', '2026-05-12', '09:30:45')"
         );
+    }
+
+    #[test]
+    fn transfer_write_sql_batches_split_large_insert_statements() {
+        let rows = (0..4).map(|index| vec![json!(index), json!("x".repeat(180 * 1024))]).collect::<Vec<_>>();
+        let statements = generate_transfer_write_sql_batches(
+            &TransferMode::Append,
+            &[String::from("id"), String::from("payload")],
+            &[Some(String::from("int")), Some(String::from("text"))],
+            &rows,
+            "events",
+            "",
+            &DatabaseType::Mysql,
+            &[],
+        );
+
+        assert!(statements.len() > 1);
+        assert!(statements.iter().all(|sql| sql.starts_with("INSERT INTO `events`")));
+    }
+
+    #[test]
+    fn transfer_write_sql_batches_keep_existing_upsert_sql_shape() {
+        let statements = generate_transfer_write_sql_batches(
+            &TransferMode::Upsert,
+            &[String::from("id"), String::from("name")],
+            &[Some(String::from("int")), Some(String::from("varchar(64)"))],
+            &[vec![json!(1), json!("Ada")]],
+            "users",
+            "",
+            &DatabaseType::Mysql,
+            &[String::from("id")],
+        );
+
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].contains("ON DUPLICATE KEY UPDATE"));
     }
 
     #[tokio::test]

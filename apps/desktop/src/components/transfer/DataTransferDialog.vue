@@ -616,7 +616,7 @@ const overallRowsLabel = computed(() =>
                   <X class="w-3 h-3 text-destructive" />
                   <span>{{ formatTableRows(transferProgress.get(table)!) }}</span>
                   <span
-                    class="text-destructive truncate max-w-[160px]"
+                    class="max-w-[520px] whitespace-normal break-words text-destructive"
                     :title="transferProgress.get(table)!.error ?? ''"
                   >
                     {{ transferProgress.get(table)!.error }}
