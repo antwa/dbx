@@ -11,6 +11,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Database,
   Info,
   KeyRound,
@@ -34,10 +35,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConnectionStore } from "@/stores/connectionStore";
+import { useHistoryStore } from "@/stores/historyStore";
 import { useSettingsStore, type StructureEditorDensity } from "@/stores/settingsStore";
 import { useTheme } from "@/composables/useTheme";
 import { useToast } from "@/composables/useToast";
 import { type SqlHighlighter, createShikiSqlHighlighter } from "@/lib/sqlHighlighter";
+import { copyToClipboard } from "@/lib/clipboard";
 import { type EditableStructureColumn, type EditableStructureIndex } from "@/lib/tableStructureEditorSql";
 import { getTableStructureCapabilities } from "@/lib/tableStructureCapabilities";
 import {
@@ -56,6 +59,7 @@ import * as api from "@/lib/api";
 const { t } = useI18n();
 const { isDark } = useTheme();
 const store = useConnectionStore();
+const historyStore = useHistoryStore();
 const settingsStore = useSettingsStore();
 const { toast } = useToast();
 const rootRef = ref<HTMLElement>();
@@ -72,6 +76,7 @@ const highlightedSql = computed(() => {
   const sql = pendingStatements.value.join("\n");
   return sqlHighlighter.value?.(sql) ?? sql;
 });
+const previewSqlText = computed(() => pendingStatements.value.join("\n"));
 
 const props = defineProps<{
   connectionId: string;
@@ -607,12 +612,60 @@ function canDropIndex(index: EditableStructureIndex): boolean {
   return !!index.original && !index.isPrimary && structureCapabilities.value.dropIndex;
 }
 
+function primarySqlOperation(sql: string): string {
+  const statement = sql
+    .split(";")
+    .map((part) => part.trim())
+    .find(Boolean);
+  return statement?.match(/^([a-z]+)/i)?.[1]?.toUpperCase() || "SQL";
+}
+
+async function recordStructureHistory(
+  sql: string,
+  start: number,
+  success: boolean,
+  result?: { affected_rows?: number },
+  error?: string,
+) {
+  const connection = store.getConfig(props.connectionId);
+  try {
+    await historyStore.add({
+      connection_id: props.connectionId,
+      connection_name: connection?.name || "",
+      database: props.database,
+      sql,
+      execution_time_ms: Date.now() - start,
+      success,
+      error,
+      activity_kind: "schema_change",
+      operation: primarySqlOperation(sql),
+      target: isCreateMode.value ? newTableName.value.trim() : props.tableName,
+      affected_rows: success ? result?.affected_rows : undefined,
+    });
+  } catch (e) {
+    console.warn("[DBX][structure-history:save-failed]", e);
+  }
+}
+
+async function copyPreviewSql() {
+  if (!previewSqlText.value.trim()) return;
+  try {
+    await copyToClipboard(previewSqlText.value);
+    toast(t("grid.copied"));
+  } catch (e: any) {
+    toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
+  }
+}
+
 async function applyChanges() {
   if (!canApply.value || !props.connectionId || !props.database) return;
   saving.value = true;
   errorMessage.value = "";
+  const sql = previewSqlText.value;
+  const startedAt = Date.now();
   try {
-    await api.executeBatch(props.connectionId, props.database, pendingStatements.value);
+    const result = await api.executeBatch(props.connectionId, props.database, pendingStatements.value);
+    await recordStructureHistory(sql, startedAt, true, result);
     toast(t("structureEditor.saved"), 2500);
     emit("saved", tableComment.value !== originalTableComment.value);
     if (isCreateMode.value) {
@@ -622,6 +675,7 @@ async function applyChanges() {
     }
   } catch (e: any) {
     errorMessage.value = e?.message || String(e);
+    await recordStructureHistory(sql, startedAt, false, undefined, errorMessage.value);
   } finally {
     saving.value = false;
   }
@@ -1370,10 +1424,21 @@ watch(
               {{ t("structureEditor.ready") }}
             </Badge>
           </div>
-          <Badge variant="secondary">
-            <Loader2 v-if="sqlPreviewLoading" class="h-3 w-3 animate-spin" />
-            <span v-else>{{ pendingStatements.length }}</span>
-          </Badge>
+          <div class="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              :class="structureToolbarButtonClass"
+              :disabled="!previewSqlText.trim()"
+              @click="copyPreviewSql"
+            >
+              <Copy :class="[structureIconClass, 'mr-1']" />
+              {{ t("structureEditor.copySql") }}
+            </Button>
+            <Badge variant="secondary">
+              <Loader2 v-if="sqlPreviewLoading" class="h-3 w-3 animate-spin" />
+              <span v-else>{{ pendingStatements.length }}</span>
+            </Badge>
+          </div>
         </div>
         <div class="min-h-0 flex-1 overflow-auto p-2.5">
           <div v-if="warnings.length" class="mb-2 space-y-1">
@@ -1388,7 +1453,7 @@ watch(
           </div>
           <pre
             v-if="pendingStatements.length"
-            class="whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2.5 font-mono text-[calc(var(--structure-font-size)+1px)] leading-5"
+            class="select-text whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2.5 font-mono text-[calc(var(--structure-font-size)+1px)] leading-5"
             v-html="highlightedSql"
           />
           <div
