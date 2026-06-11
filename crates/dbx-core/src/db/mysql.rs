@@ -295,14 +295,13 @@ fn mysql_value_to_json(row: &mysql_async::Row, idx: usize) -> serde_json::Value 
         | ColumnType::MYSQL_TYPE_TIME
         | ColumnType::MYSQL_TYPE_TIME2
         | ColumnType::MYSQL_TYPE_NEWDATE => {
-            if let Some(v) = row_get::<NaiveDateTime, _>(row, idx) {
-                return serde_json::Value::String(v.to_string());
-            }
-            if let Some(v) = row_get::<NaiveDate, _>(row, idx) {
-                return serde_json::Value::String(v.to_string());
-            }
-            if let Some(v) = row_get::<NaiveTime, _>(row, idx) {
-                return serde_json::Value::String(v.to_string());
+            if let Some(value) = mysql_temporal_value_to_json(
+                column.column_type(),
+                row_get::<NaiveDateTime, _>(row, idx),
+                row_get::<NaiveDate, _>(row, idx),
+                row_get::<NaiveTime, _>(row, idx),
+            ) {
+                return value;
             }
         }
         _ => {}
@@ -322,6 +321,29 @@ fn mysql_value_to_json(row: &mysql_async::Row, idx: usize) -> serde_json::Value 
         .or_else(|| row_get::<bool, _>(row, idx).map(serde_json::Value::Bool))
         .or_else(|| row_get::<Vec<u8>, _>(row, idx).map(|bytes| mysql_bytes_to_json(bytes, column)))
         .unwrap_or(serde_json::Value::Null)
+}
+
+fn mysql_temporal_value_to_json(
+    column_type: ColumnType,
+    datetime: Option<NaiveDateTime>,
+    date: Option<NaiveDate>,
+    time: Option<NaiveTime>,
+) -> Option<serde_json::Value> {
+    let value = match column_type {
+        ColumnType::MYSQL_TYPE_DATE | ColumnType::MYSQL_TYPE_NEWDATE => {
+            date.map(|value| value.to_string()).or_else(|| datetime.map(|value| value.date().to_string()))?
+        }
+        ColumnType::MYSQL_TYPE_TIME | ColumnType::MYSQL_TYPE_TIME2 => time.map(|value| value.to_string())?,
+        ColumnType::MYSQL_TYPE_TIMESTAMP
+        | ColumnType::MYSQL_TYPE_TIMESTAMP2
+        | ColumnType::MYSQL_TYPE_DATETIME
+        | ColumnType::MYSQL_TYPE_DATETIME2 => datetime
+            .map(|value| value.to_string())
+            .or_else(|| date.map(|value| value.to_string()))
+            .or_else(|| time.map(|value| value.to_string()))?,
+        _ => return None,
+    };
+    Some(serde_json::Value::String(value))
 }
 
 pub async fn connect(url: &str, fallback_timeout: Duration) -> Result<MySqlPool, String> {
@@ -2102,6 +2124,27 @@ mod tests {
         );
 
         assert_eq!(mysql_datetime_to_string(value), "2026-05-12 00:00:00");
+    }
+
+    #[test]
+    fn mysql_date_values_display_without_midnight_time() {
+        let date = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let datetime = date.and_hms_opt(0, 0, 0).unwrap();
+
+        assert_eq!(
+            mysql_temporal_value_to_json(ColumnType::MYSQL_TYPE_DATE, Some(datetime), Some(date), None),
+            Some(serde_json::json!("2026-06-10"))
+        );
+    }
+
+    #[test]
+    fn mysql_datetime_values_keep_time_component() {
+        let datetime = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap().and_hms_opt(12, 34, 56).unwrap();
+
+        assert_eq!(
+            mysql_temporal_value_to_json(ColumnType::MYSQL_TYPE_DATETIME, Some(datetime), None, None),
+            Some(serde_json::json!("2026-06-10 12:34:56"))
+        );
     }
 
     #[tokio::test]
