@@ -681,7 +681,7 @@ pub async fn test_connection_core(config: &AiConfig) -> Result<String, String> {
         config: config.clone(),
         system_prompt: String::new(),
         messages: vec![AiMessage { role: "user".into(), content: "hi".into() }],
-        max_tokens: Some(1),
+        max_tokens: Some(16),
         temperature: Some(0.0),
     };
 
