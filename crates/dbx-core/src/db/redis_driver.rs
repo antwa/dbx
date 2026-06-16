@@ -916,7 +916,16 @@ pub fn redis_command_raw_to_json(value: RedisRawValue) -> serde_json::Value {
             "kind": format!("{kind:?}"),
             "data": redis_command_raw_to_json(RedisRawValue::Array(data)),
         }),
-        RedisRawValue::BulkString(bytes) => serde_json::Value::String(redis_bytes_to_display(&bytes)),
+        RedisRawValue::BulkString(bytes) => {
+            let text = redis_bytes_to_display(&bytes);
+            let trimmed = text.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    return super::json_value_for_js(json);
+                }
+            }
+            serde_json::Value::String(text)
+        }
         RedisRawValue::SimpleString(value) => serde_json::Value::String(value),
         RedisRawValue::Okay => serde_json::Value::String("OK".to_string()),
         RedisRawValue::Int(value) => super::safe_i64_to_json(value),
@@ -1998,6 +2007,25 @@ mod tests {
         let raw = RedisRawValue::Int(2_326_645_729_978_441_729);
 
         assert_eq!(redis_command_raw_to_json(raw), serde_json::json!("2326645729978441729"));
+    }
+
+    #[test]
+    fn converts_bulkstring_json_with_unsafe_int64_for_js() {
+        let raw = RedisRawValue::BulkString(br#"{"uid":2321205972557213697,"name":"test"}"#.to_vec());
+
+        assert_eq!(redis_command_raw_to_json(raw), serde_json::json!({"uid": "2321205972557213697", "name": "test"}));
+    }
+
+    #[test]
+    fn keeps_plain_bulkstring_as_is() {
+        let raw = RedisRawValue::BulkString(b"hello world".to_vec());
+        assert_eq!(redis_command_raw_to_json(raw), serde_json::json!("hello world"));
+    }
+
+    #[test]
+    fn keeps_string_like_number_as_string() {
+        let raw = RedisRawValue::BulkString(b"42".to_vec());
+        assert_eq!(redis_command_raw_to_json(raw), serde_json::json!("42"));
     }
 
     #[test]
