@@ -32,6 +32,8 @@ export default {
     stopExplain: "実行計画の表示を停止",
     formatSql: "SQLをフォーマット",
     formatSqlFailed: "SQLのフォーマットに失敗しました",
+    keywordCaseLower: "SQLキーワードを小文字にする",
+    keywordCaseUpper: "SQLキーワードを大文字にする",
     previewSql: "SQLをプレビュー",
     hidePreviewSql: "SQLプレビューを非表示",
     saveSql: "SQLライブラリに保存",

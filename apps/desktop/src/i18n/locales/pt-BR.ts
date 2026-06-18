@@ -32,6 +32,8 @@ export default {
     stopExplain: "Parar explicação",
     formatSql: "Formatar SQL",
     formatSqlFailed: "Falha ao formatar SQL",
+    keywordCaseLower: "Usar palavras-chave SQL em minúsculas",
+    keywordCaseUpper: "Usar palavras-chave SQL em maiúsculas",
     saveSql: "Salvar na Biblioteca SQL",
     openSql: "Abrir arquivo SQL",
     theme: "Tema",

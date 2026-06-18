@@ -32,6 +32,8 @@ export default {
     stopExplain: "停止执行计划",
     formatSql: "格式化 SQL",
     formatSqlFailed: "SQL 格式化失败",
+    keywordCaseLower: "使用小写 SQL 关键字",
+    keywordCaseUpper: "使用大写 SQL 关键字",
     previewSql: "预览 SQL",
     hidePreviewSql: "隐藏 SQL 预览",
     saveSql: "保存到 SQL 库",

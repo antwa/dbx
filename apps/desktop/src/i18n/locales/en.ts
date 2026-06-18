@@ -32,6 +32,8 @@ export default {
     stopExplain: "Stop explain",
     formatSql: "Format SQL",
     formatSqlFailed: "Failed to format SQL",
+    keywordCaseLower: "Use lower-case SQL keywords",
+    keywordCaseUpper: "Use upper-case SQL keywords",
     previewSql: "Preview SQL",
     hidePreviewSql: "Hide SQL Preview",
     saveSql: "Save to SQL Library",

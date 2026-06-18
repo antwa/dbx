@@ -32,6 +32,8 @@ export default {
     stopExplain: "停止執行計畫",
     formatSql: "格式化 SQL",
     formatSqlFailed: "SQL 格式化失敗",
+    keywordCaseLower: "使用小寫 SQL 關鍵字",
+    keywordCaseUpper: "使用大寫 SQL 關鍵字",
     saveSql: "儲存到 SQL 庫",
     openSql: "開啟 SQL 檔案",
     theme: "主題",
