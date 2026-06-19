@@ -2383,12 +2383,11 @@ watch(
                 <div class="space-y-2">
                   <Label for="webdav-password">{{ t("settings.syncPassword") }}</Label>
                   <div class="relative">
-                    <PasswordInput id="webdav-password" v-model="webdavPassword" :placeholder="webdavHasSavedPassword ? '••••••••' : t('settings.syncPasswordPlaceholder')" :disabled="webdavHasSavedPassword" autocomplete="current-password" />
-                    <Button
+                    <PasswordInput id="webdav-password" v-model="webdavPassword" :placeholder="webdavHasSavedPassword ? '••••••••' : t('settings.syncPasswordPlaceholder')" :disabled="webdavHasSavedPassword" :show-toggle="!webdavHasSavedPassword" autocomplete="current-password" />
+                    <button
                       v-if="webdavHasSavedPassword"
-                      variant="ghost"
-                      size="icon-xs"
-                      class="absolute right-1 top-1/2 -translate-y-1/2"
+                      type="button"
+                      class="absolute right-1 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
                       :title="t('settings.syncClearSavedPassword')"
                       @click="
                         webdavRememberPassword = false;
@@ -2398,7 +2397,7 @@ watch(
                       "
                     >
                       <X class="size-3.5" />
-                    </Button>
+                    </button>
                   </div>
                   <label class="flex items-center gap-2 text-xs text-muted-foreground">
                     <input v-model="webdavRememberPassword" type="checkbox" class="h-4 w-4 shrink-0 accent-primary" />
