@@ -1017,7 +1017,7 @@ pub async fn connection_final_proxy_port(
 
 #[tauri::command]
 pub async fn disconnect_db(state: State<'_, Arc<AppState>>, connection_id: String) -> Result<(), String> {
-    state.remove_connection_pools_detached(&connection_id).await;
+    state.remove_connection_pools(&connection_id).await;
     drop_mq_adapters_for_connection_ids(state.inner(), std::slice::from_ref(&connection_id)).await;
     state.reset_connection_transport(&connection_id).await;
     if connection_id.starts_with("__visible_draft_") {
@@ -1041,6 +1041,11 @@ pub async fn close_database_connection(
 pub async fn refresh_connections(state: State<'_, Arc<AppState>>) -> Result<(), String> {
     state.refresh_connections().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn check_connection_health(state: State<'_, Arc<AppState>>, connection_id: String) -> Result<(), String> {
+    state.check_connection_health(&connection_id).await
 }
 
 /// Check whether a connection has read-only protection enabled.

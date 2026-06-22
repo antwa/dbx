@@ -260,11 +260,23 @@ export const useConnectionStore = defineStore("connection", () => {
     return message;
   }
 
-  function recordMetadataLoadError(connectionId: string, error: unknown) {
+  function markConnectionLost(connectionId: string, error: unknown) {
+    connectedIds.value.delete(connectionId);
+    if (activeConnectionId.value === connectionId) activeConnectionId.value = null;
+    recordConnectionError(connectionId, error);
+  }
+
+  function recordConnectionLostError(connectionId: string, error: unknown): boolean {
     if (shouldMarkDisconnected(error)) {
-      connectedIds.value.delete(connectionId);
-      if (activeConnectionId.value === connectionId) activeConnectionId.value = null;
+      markConnectionLost(connectionId, error);
+      return true;
     }
+    return false;
+  }
+
+  // Metadata loaders keep this internal: match connection-loss errors before recording generic errors.
+  function recordMetadataLoadError(connectionId: string, error: unknown) {
+    if (recordConnectionLostError(connectionId, error)) return;
     recordConnectionError(connectionId, error);
   }
 
@@ -902,7 +914,17 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   async function ensureConnected(connectionId: string) {
-    if (connectedIds.value.has(connectionId)) return;
+    if (connectedIds.value.has(connectionId)) {
+      // Optimistic: verify backend pool is actually healthy
+      try {
+        await api.checkConnectionHealth(connectionId);
+        return;
+      } catch {
+        // Backend pool is dead — remove from connectedIds and reconnect
+        connectedIds.value.delete(connectionId);
+        if (activeConnectionId.value === connectionId) activeConnectionId.value = null;
+      }
+    }
     let config = getConfig(connectionId);
     if (!config) {
       await initFromDisk();
@@ -3039,6 +3061,8 @@ export const useConnectionStore = defineStore("connection", () => {
     setConnectionError,
     clearConnectionError,
     recordConnectionError,
+    markConnectionLost,
+    recordConnectionLostError,
     sidebarLayout,
     getConfig,
     isTreeNodePinned,

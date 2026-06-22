@@ -1292,6 +1292,32 @@ impl AppState {
         self.proxy_tunnels.stop_tunnel(connection_id).await;
     }
 
+    /// Health-check the base connection pool for a given connection_id.
+    /// Returns `Ok(())` if the pool exists and is healthy, `Err` otherwise.
+    /// If the pool is unhealthy it is removed from the map so subsequent
+    /// `get_or_create_pool` calls will transparently recreate it.
+    pub async fn check_connection_health(&self, connection_id: &str) -> Result<(), String> {
+        let db_type = {
+            let configs = self.configs.read().await;
+            configs.get(connection_id).map(|c| c.db_type)
+        };
+        let pool_key = base_pool_key_for(db_type, connection_id, None, false);
+
+        // Check if pool exists first
+        {
+            let connections = self.connections.read().await;
+            if !connections.contains_key(&pool_key) {
+                return Err("No active connection pool found".to_string());
+            }
+        }
+
+        // `remove_stale_connection_pool` returns true if the pool was stale (and removed)
+        if self.remove_stale_connection_pool(&pool_key).await {
+            return Err("Connection pool is unhealthy".to_string());
+        }
+        Ok(())
+    }
+
     pub async fn refresh_connections(&self) {
         // Clone pool handles under a short-lived read lock, then release it
         // before performing I/O-heavy health checks to avoid blocking writers.

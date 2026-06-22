@@ -473,6 +473,10 @@ export async function disconnectDb(connectionId: string): Promise<void> {
   return invoke("disconnect_db", { connectionId });
 }
 
+export async function checkConnectionHealth(connectionId: string): Promise<void> {
+  return invoke("check_connection_health", { connectionId });
+}
+
 export async function closeDatabaseConnection(connectionId: string, database: string): Promise<boolean> {
   return invoke("close_database_connection", { connectionId, database });
 }

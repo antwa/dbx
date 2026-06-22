@@ -1684,6 +1684,8 @@ export const useQueryStore = defineStore("query", () => {
       }
     } catch (e: any) {
       console.error("[DBX][executeTabSql:error]", { traceId, elapsed: elapsed(), error: e });
+      // Sync connection state if the error indicates a lost connection
+      useConnectionStore().recordConnectionLostError(tab.connectionId, e);
       const current = tabs.value.find((t) => t.id === id);
       if (current?.executionId === executionId) {
         current.result = toErrorResult(e);
@@ -1836,6 +1838,8 @@ export const useQueryStore = defineStore("query", () => {
       }
       return canceled;
     } catch (e: any) {
+      // Sync connection state if the error indicates a lost connection
+      if (tab) useConnectionStore().recordConnectionLostError(tab.connectionId, e);
       const current = tabs.value.find((t) => t.id === id);
       if (current && current.executionId === executionId) {
         current.isCancelling = false;
@@ -1882,12 +1886,15 @@ export const useQueryStore = defineStore("query", () => {
   function notifyConnectionMayBeLost() {
     const stuck = tabs.value.filter((t) => t.isExecuting);
     if (stuck.length > 0) {
+      const connStore = useConnectionStore();
       stuck.forEach((tab) => {
         tab.isExecuting = false;
         tab.isCancelling = false;
         tab.queryExecutionStartedAt = undefined;
         tab.executionId = undefined;
-        tab.result = toErrorResult(new Error(t("editor.connectionMayBeLost")));
+        const error = new Error(t("editor.connectionMayBeLost"));
+        tab.result = toErrorResult(error);
+        connStore.markConnectionLost(tab.connectionId, error);
       });
     }
   }
