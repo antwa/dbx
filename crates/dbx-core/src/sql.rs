@@ -174,6 +174,7 @@ impl SqlDialectProfile {
                 | DatabaseType::Dameng
                 | DatabaseType::Gaussdb
                 | DatabaseType::Yashandb
+                | DatabaseType::Oscar
                 | DatabaseType::OceanbaseOracle
         )
     }
@@ -2520,6 +2521,7 @@ DELIMITER ;";
             DatabaseType::Dameng,
             DatabaseType::Gaussdb,
             DatabaseType::Yashandb,
+            DatabaseType::Oscar,
             DatabaseType::OceanbaseOracle,
         ] {
             let profile = SqlDialectProfile::for_database_type(db_type);

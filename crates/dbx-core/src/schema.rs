@@ -535,7 +535,11 @@ async fn list_databases_once(state: &AppState, connection_id: &str) -> Result<Ve
             let session = session.clone();
             drop(connections);
             return session
-                .invoke::<Vec<db::DatabaseInfo>>("listDatabases", serde_json::json!({ "connection": config.as_ref() }))
+                .invoke_with_timeout::<Vec<db::DatabaseInfo>>(
+                    "listDatabases",
+                    serde_json::json!({ "connection": config.as_ref() }),
+                    agent_metadata_timeout(Some(config.as_ref())),
+                )
                 .await;
         }
         if let Some(client) = extract_pool!(&connections, connection_id, ClickHouse) {
@@ -644,9 +648,10 @@ pub async fn list_data_types_core(
             let session = session.clone();
             drop(connections);
             return session
-                .invoke::<Vec<String>>(
+                .invoke_with_timeout::<Vec<String>>(
                     "listDataTypes",
                     serde_json::json!({ "connection": config.as_ref(), "database": database }),
+                    agent_metadata_timeout(Some(config.as_ref())),
                 )
                 .await
                 .map(deduplicate_data_type_names);
@@ -697,9 +702,10 @@ async fn list_schemas_once(
             let session = session.clone();
             drop(connections);
             return session
-                .invoke::<Vec<String>>(
+                .invoke_with_timeout::<Vec<String>>(
                     "listSchemas",
                     serde_json::json!({ "connection": config.as_ref(), "database": database }),
+                    agent_metadata_timeout(Some(config.as_ref())),
                 )
                 .await;
         }
@@ -1117,9 +1123,10 @@ async fn list_tables_once(
                     .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types));
             }
             return session
-                .invoke::<Vec<db::TableInfo>>(
+                .invoke_with_timeout::<Vec<db::TableInfo>>(
                     "listTables",
                     serde_json::json!({ "connection": config.as_ref(), "database": database, "schema": schema }),
+                    agent_metadata_timeout(Some(config.as_ref())),
                 )
                 .await
                 .map(|tables| filter_table_infos(tables, filter, limit, offset, object_types));
@@ -1376,7 +1383,7 @@ async fn external_driver_presto_like_tables(
     schema: &str,
 ) -> Result<Vec<db::TableInfo>, String> {
     let result: db::QueryResult = session
-        .invoke(
+        .invoke_with_timeout(
             "executeQuery",
             serde_json::json!({
                 "connection": config,
@@ -1387,6 +1394,7 @@ async fn external_driver_presto_like_tables(
                 "fetchSize": 1000,
                 "timeoutSecs": 60
             }),
+            agent_metadata_timeout(Some(config)),
         )
         .await?;
     Ok(presto_like_tables_from_query_result(&result))
@@ -2417,9 +2425,10 @@ async fn list_objects_once(
                 return external_driver_presto_like_objects(session, config.as_ref(), database, schema).await;
             }
             return session
-                .invoke::<Vec<db::ObjectInfo>>(
+                .invoke_with_timeout::<Vec<db::ObjectInfo>>(
                     "listObjects",
                     serde_json::json!({ "connection": config.as_ref(), "database": database, "schema": schema }),
+                    agent_metadata_timeout(Some(config.as_ref())),
                 )
                 .await;
         }
@@ -2528,9 +2537,10 @@ async fn list_completion_objects_once(
         let session = session.clone();
         drop(connections);
         return session
-            .invoke::<Vec<db::ObjectInfo>>(
+            .invoke_with_timeout::<Vec<db::ObjectInfo>>(
                 "listObjects",
                 serde_json::json!({ "connection": config.as_ref(), "database": database, "schema": schema }),
+                agent_metadata_timeout(Some(config.as_ref())),
             )
             .await
             .map(filter_completion_objects);
@@ -2703,7 +2713,7 @@ pub async fn get_columns_core(
                 let session = session.clone();
                 drop(connections);
                 let columns = session
-                    .invoke::<Vec<db::ColumnInfo>>(
+                    .invoke_with_timeout::<Vec<db::ColumnInfo>>(
                         "getColumns",
                         serde_json::json!({
                             "connection": config.as_ref(),
@@ -2711,6 +2721,7 @@ pub async fn get_columns_core(
                             "schema": schema,
                             "table": table,
                         }),
+                        agent_metadata_timeout(Some(config.as_ref())),
                     )
                     .await?;
                 return Ok(deduplicate_column_infos(columns));
@@ -3558,7 +3569,7 @@ async fn get_object_source_once(
             let session = session.clone();
             drop(connections);
             let result: db::ObjectSource = session
-                .invoke(
+                .invoke_with_timeout(
                     "getObjectSource",
                     serde_json::json!({
                         "connection": config.as_ref(),
@@ -3567,6 +3578,7 @@ async fn get_object_source_once(
                         "name": name,
                         "object_type": &object_type,
                     }),
+                    agent_metadata_timeout(Some(config.as_ref())),
                 )
                 .await?;
             return Ok(result);
