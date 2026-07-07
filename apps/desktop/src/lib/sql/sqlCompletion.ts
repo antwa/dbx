@@ -1,3 +1,4 @@
+import { Cassandra, MariaSQL, MSSQL, MySQL, PLSQL, PostgreSQL, SQLite, StandardSQL } from "@codemirror/lang-sql";
 import type { DatabaseType, SqlSnippet } from "@/types/database";
 import { buildMongoCompletionItemsFromContext, type MongoCompletionItem } from "@/lib/mongo/mongoCompletion";
 
@@ -1063,6 +1064,15 @@ const SQL_ALIAS_RESERVED_WORDS = new Set([
   "where",
   "with",
 ]);
+
+const SQL_ALIAS_KEYWORD_WORDS = new Set(sqlAliasKeywordWords(SQL_KEYWORDS.join(" "), StandardSQL.spec.keywords, MySQL.spec.keywords, MariaSQL.spec.keywords, PostgreSQL.spec.keywords, MSSQL.spec.keywords, SQLite.spec.keywords, PLSQL.spec.keywords, Cassandra.spec.keywords));
+
+function sqlAliasKeywordWords(...sources: Array<string | undefined>): string[] {
+  return sources
+    .flatMap((source) => (source ?? "").split(/\s+/))
+    .filter((keyword) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(keyword))
+    .map((keyword) => keyword.toLowerCase());
+}
 
 export interface SqlCompletionTable {
   name: string;
@@ -3045,7 +3055,7 @@ function generateTableCompletionAlias(tableName: string, existing = new Set<stri
   const candidates = buildAliasCandidates(tableName);
 
   for (const candidate of candidates.filter(Boolean)) {
-    if (SQL_ALIAS_RESERVED_WORDS.has(candidate.toLowerCase())) continue;
+    if (isUnsafeSqlAlias(candidate.toLowerCase())) continue;
     if (!existing.has(candidate.toLowerCase())) return candidate;
     for (let index = 2; index < 100; index++) {
       const numbered = `${candidate}${index}`;
@@ -3081,7 +3091,11 @@ function buildAliasCandidates(tableName: string): string[] {
 
 function aliasConflicts(candidate: string, existing: Set<string>): boolean {
   const lower = candidate.toLowerCase();
-  return existing.has(lower) || SQL_ALIAS_RESERVED_WORDS.has(lower);
+  return existing.has(lower) || isUnsafeSqlAlias(lower);
+}
+
+function isUnsafeSqlAlias(candidate: string): boolean {
+  return SQL_ALIAS_RESERVED_WORDS.has(candidate) || SQL_ALIAS_KEYWORD_WORDS.has(candidate);
 }
 
 function isFollowedByJoin(beforeToken: string): boolean {
