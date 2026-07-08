@@ -5066,7 +5066,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
 
   <CustomContextMenu v-else :items="treeItemMenuItems()" v-slot="contextMenuSlot">
     <div @contextmenu="onTreeItemContextMenu($event, contextMenuSlot.onContextMenu)">
-      <LightTooltip :text="displayLabel(node)" :disabled="isTooltipDisabled()" side="right" :side-offset="8" :delay="0" :close-delay="0">
+      <LightTooltip :text="displayLabel(node)" :disabled="isTooltipDisabled()" side="right" :side-offset="8" :delay="0" :close-delay="0" :surface="detailTooltip ? 'popover' : 'foreground'">
         <div
           ref="rowRef"
           class="group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative outline-none"
