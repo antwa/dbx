@@ -61,6 +61,7 @@ import { kvRootNodeLabel } from "@/lib/kv/kvRootPresentation";
 import { REDIS_SCAN_PAGE_SIZE_DEFAULT } from "@/lib/redis/redisKeyPattern";
 import { appendAgentDriverUpdateHint, hasAgentDriverUpdate, type AgentDriverInstallState } from "@/lib/connection/agentDriverInstallHint";
 import { appendConnectionErrorHints } from "@/lib/connection/connectionErrorHints";
+import { appendVisibleDatabaseSelection } from "@/lib/connection/connectionVisibleDatabases";
 import { createMetadataLoadTrace, logMetadataLoadTrace, MetadataLoadCoordinator, type MetadataLoadTraceLogger } from "@/lib/metadata/metadataLoadCoordinator";
 import type { MetadataScopeInput } from "@/lib/metadata/metadataLoadScope";
 import { MetadataResultCache, type MetadataCacheInvalidation } from "@/lib/metadata/metadataResultCache";
@@ -1635,6 +1636,14 @@ export const useConnectionStore = defineStore("connection", () => {
     if (!config || !Array.isArray(config.visible_databases)) return;
     await updateVisibleDatabasesConfig(connectionId, undefined);
     await reloadConnectionDatabaseChildren(connectionId);
+  }
+
+  async function ensureVisibleDatabase(connectionId: string, databaseName: string) {
+    const config = getConfig(connectionId);
+    if (!config) return;
+    const visibleDatabases = appendVisibleDatabaseSelection(config.visible_databases, databaseName);
+    if (visibleDatabases === config.visible_databases) return;
+    await updateVisibleDatabasesConfig(connectionId, visibleDatabases);
   }
 
   async function updateVisibleDatabasesConfig(connectionId: string, visibleDatabases: string[] | undefined) {
@@ -4776,6 +4785,7 @@ export const useConnectionStore = defineStore("connection", () => {
     isDefaultDatabase,
     setVisibleDatabases,
     clearVisibleDatabases,
+    ensureVisibleDatabase,
     setVisibleSchemas,
     clearVisibleSchemas,
     removeConnection,
