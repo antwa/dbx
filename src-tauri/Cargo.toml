@@ -66,3 +66,6 @@ tauri-plugin-clipboard-manager = "2.3.2"
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"

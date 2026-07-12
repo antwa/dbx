@@ -69,8 +69,25 @@ fn should_hide_window_on_close(target_os: &str) -> bool {
     matches!(target_os, "macos" | "windows")
 }
 
-fn should_setup_desktop_tray(target_os: &str, show_tray_icon: bool) -> bool {
-    show_tray_icon && matches!(target_os, "macos" | "windows")
+fn should_setup_desktop_tray(target_os: &str, show_tray_icon: bool, linux_appindicator_available: bool) -> bool {
+    show_tray_icon
+        && (matches!(target_os, "macos" | "windows") || (target_os == "linux" && linux_appindicator_available))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_appindicator_available() -> bool {
+    const APPINDICATOR_LIBRARIES: &[&str] = &["libayatana-appindicator3.so.1", "libappindicator3.so.1"];
+
+    APPINDICATOR_LIBRARIES.iter().any(|library| {
+        // tray-icon loads AppIndicator dynamically and panics when neither ABI is
+        // installed, so probe the same libraries before entering that code path.
+        unsafe { libloading::Library::new(library).is_ok() }
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_appindicator_available() -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -449,7 +466,15 @@ fn apply_desktop_tray_icon_theme(app: &tauri::AppHandle, _icon_theme: DesktopIco
             };
             _tray.set_icon(icon)?;
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(target_os = "linux")]
+        {
+            let icon = match _icon_theme {
+                DesktopIconTheme::Default => app.default_window_icon().cloned(),
+                DesktopIconTheme::Black => Some(BLACK_APP_ICON),
+            };
+            _tray.set_icon(icon)?;
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = (_tray, _icon_theme);
         }
@@ -460,7 +485,8 @@ fn apply_desktop_tray_icon_theme(app: &tauri::AppHandle, _icon_theme: DesktopIco
 pub(crate) fn apply_desktop_settings(app: &tauri::AppHandle, desktop_settings: &DesktopSettings) -> tauri::Result<()> {
     apply_debug_log_level(desktop_settings.debug_logging_enabled);
     apply_desktop_icon_theme(app, desktop_settings.icon_theme)?;
-    if matches!(std::env::consts::OS, "macos" | "windows") {
+    if should_setup_desktop_tray(std::env::consts::OS, desktop_settings.show_tray_icon, linux_appindicator_available())
+    {
         if let Some(tray) = app.tray_by_id(DESKTOP_TRAY_ID) {
             tray.set_visible(desktop_settings.show_tray_icon)?;
             apply_desktop_tray_icon_theme(app, desktop_settings.icon_theme)?;
@@ -496,12 +522,14 @@ mod tests {
     }
 
     #[test]
-    fn sets_up_desktop_tray_for_windows_and_macos() {
-        assert!(should_setup_desktop_tray("windows", true));
-        assert!(should_setup_desktop_tray("macos", true));
-        assert!(!should_setup_desktop_tray("windows", false));
-        assert!(!should_setup_desktop_tray("macos", false));
-        assert!(!should_setup_desktop_tray("linux", true));
+    fn sets_up_desktop_tray_for_windows_macos_and_linux() {
+        assert!(should_setup_desktop_tray("windows", true, false));
+        assert!(should_setup_desktop_tray("macos", true, false));
+        assert!(should_setup_desktop_tray("linux", true, true));
+        assert!(!should_setup_desktop_tray("linux", true, false));
+        assert!(!should_setup_desktop_tray("windows", false, true));
+        assert!(!should_setup_desktop_tray("macos", false, true));
+        assert!(!should_setup_desktop_tray("linux", false, true));
     }
 
     #[cfg(target_os = "macos")]
@@ -800,7 +828,11 @@ pub fn run() {
                     let _ = window.set_decorations(decorations);
                 }
             }
-            if should_setup_desktop_tray(std::env::consts::OS, desktop_settings.show_tray_icon) {
+            if should_setup_desktop_tray(
+                std::env::consts::OS,
+                desktop_settings.show_tray_icon,
+                linux_appindicator_available(),
+            ) {
                 setup_desktop_tray(app, desktop_settings.icon_theme)?;
             }
             apply_desktop_icon_theme(app.handle(), desktop_settings.icon_theme)?;
