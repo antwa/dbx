@@ -774,7 +774,7 @@ export interface QueryTab {
   explainExecutionId?: string;
   /** Per-run connection session for sequential MySQL explain formats. */
   explainClientSessionId?: string;
-  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "mongo-gridfs" | "mongo-bucket" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users" | "dameng-jobs";
+  mode: "data" | "query" | "redis" | "redis-dashboard" | "mongo" | "mongo-gridfs" | "mongo-bucket" | "vector" | "etcd" | "zookeeper" | "mq" | "nacos" | "objects" | "structure" | "users" | "dameng-jobs" | "processlist";
   mqTenant?: string;
   mqInitialTab?: "topics";
   nacosNamespace?: string;

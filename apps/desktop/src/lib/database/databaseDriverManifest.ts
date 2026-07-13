@@ -20,6 +20,7 @@ export const DATABASE_PRODUCT_CAPABILITY_KEYS = [
   "fieldLineage",
   "sqlExplain",
   "userAdmin",
+  "processList",
   "driverManagement",
 ] as const;
 
