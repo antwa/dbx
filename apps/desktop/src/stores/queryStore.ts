@@ -326,6 +326,21 @@ export const useQueryStore = defineStore("query", () => {
   const t = getI18nT();
   const settingsStore = useSettingsStore();
   const tabs = ref<QueryTab[]>([]);
+  // A stable Set of "connectionId\x00database" keys. Computed only from the
+  // minimal tab identity fields so that it does NOT invalidate when other
+  // properties change (isExecuting, result, sql, tableMeta...). Previously
+  // isDatabaseOpen() called tabs.value.some() which tracked the full reactive
+  // array — every mutation during openData() forced all database-type sidebar
+  // TreeItems to recompute showsDatabaseOpenIndicator.
+  const openDatabaseKeys = computed(() => {
+    const keys = new Set<string>();
+    for (const tab of tabs.value) {
+      if (tab.connectionId && tab.database != null) {
+        keys.add(`${tab.connectionId}\x00${tab.database}`);
+      }
+    }
+    return keys;
+  });
   const activeTabId = ref<string | null>(null);
   const isOpenTabsLoaded = ref(false);
   const activeTabHistory = ref<string[]>([]);
@@ -851,7 +866,7 @@ export const useQueryStore = defineStore("query", () => {
     return tabs.value.find((tab) => tab.connectionId === connectionId && tab.database === database && tab.title === title && tab.mode === mode && (tab.schema || "") === (schema || ""));
   }
 
-  function createTab(connectionId: string, database: string, title?: string, mode: QueryTab["mode"] = "query", schema?: string) {
+  function createTab(connectionId: string, database: string, title?: string, mode: QueryTab["mode"] = "query", schema?: string, initialSql?: string) {
     if (title) {
       const existing = findTabByIdentity(connectionId, database, title, mode, schema);
       if (existing) {
@@ -868,13 +883,13 @@ export const useQueryStore = defineStore("query", () => {
       connectionId,
       database,
       schema,
-      sql: "",
+      sql: initialSql ?? "",
       isExecuting: false,
       isCancelling: false,
       isExplaining: false,
       mode,
     };
-    if (mode === "query") tab.originalSql = "";
+    if (mode === "query") tab.originalSql = initialSql ?? "";
     tabs.value.push(tab);
     activeTabId.value = id;
     return id;
@@ -1690,7 +1705,7 @@ export const useQueryStore = defineStore("query", () => {
   }
 
   function isDatabaseOpen(connectionId: string, database: string) {
-    return tabs.value.some((tab) => tab.connectionId === connectionId && tab.database === database);
+    return openDatabaseKeys.value.has(`${connectionId}\x00${database}`);
   }
 
   function rollbackTabsWhere(predicate: (tab: QueryTab) => boolean, options?: { resetAutoCommit?: boolean }) {
@@ -3801,6 +3816,7 @@ export const useQueryStore = defineStore("query", () => {
     releaseConnectionTabs,
     releaseDatabaseTabs,
     isDatabaseOpen,
+    openDatabaseKeys,
     rollbackConnectionTransactions,
     rollbackDatabaseTransactions,
     updateSql,

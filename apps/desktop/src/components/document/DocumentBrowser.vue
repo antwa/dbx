@@ -168,7 +168,7 @@ const gridResult = computed<QueryResult>(() => {
     }),
   );
 
-  return { columns, rows, affected_rows: 0, execution_time_ms: 0, truncated: false };
+  return { columns, rows, mongo_documents: docs, affected_rows: 0, execution_time_ms: 0, truncated: false };
 });
 const documentFilterFieldOptions = computed(() => gridResult.value.columns);
 const documentStructuredFilterCount = computed(() => (appliedDocumentFilter.value ? 1 : 0));
@@ -421,6 +421,7 @@ const customSaveHandler = computed<CustomSaveHandler>(() => ({
   preview: previewDocumentChanges,
   supportsInsert: true,
   readonlyColumns: documentStoreProvider.value.kind === "elasticsearch" ? ["_routing"] : undefined,
+  targetLabel: props.collection,
 }));
 
 function stopDocumentLoadingTimer() {
@@ -943,6 +944,7 @@ function resetTableSearchSplitWidth() {
       class="flex-1 min-h-0"
       :result="gridResult"
       context="results"
+      :database-type="props.databaseType"
       editable
       :custom-save-handler="customSaveHandler"
       :loading="loading"

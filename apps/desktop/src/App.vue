@@ -38,7 +38,7 @@ import * as api from "@/lib/backend/api";
 import { connectionRedactedNameLabel } from "@/lib/connection/connectionPresentation";
 import { quickConnectionOpenTarget } from "@/lib/connection/connectionOpenTarget";
 import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
-import { findTreeNodeById, resolveNewQueryTarget } from "@/lib/sql/newQueryContext";
+import { findTreeNodeById, resolveNewQueryTarget, resolveNewQueryInitialSql } from "@/lib/sql/newQueryContext";
 import { buildExecutableObjectSourceStatements, executeObjectSourceSave } from "@/lib/table/objectSourceEditor";
 import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionSnapshot } from "@/lib/sql/sqlExecutionTarget";
 import { uuid } from "@/lib/common/utils";
@@ -329,9 +329,12 @@ function closeDriverStorePage() {
 const toolbarAgentDriverUpdateCount = computed(() => (updateNotificationsEnabled.value ? agentDriverUpdateCount.value : 0));
 const toolbarHasUpdateAvailable = computed(() => updateNotificationsEnabled.value && hasUpdateAvailable.value);
 const hasSqlFileConnections = computed(() => connectionStore.connections.some((c) => supportsSqlFileExecution(c.db_type)));
+const queryEditorDdlDatabaseType = computed(() => {
+  if (!queryEditorDdlTarget.value?.connectionId) return undefined;
+  return effectiveDatabaseTypeForConnection(connectionStore.getConfig(queryEditorDdlTarget.value.connectionId));
+});
 const queryEditorDdlDialect = computed(() => {
-  if (!queryEditorDdlTarget.value?.connectionId) return "mysql";
-  return codeMirrorSqlDialect(effectiveDatabaseTypeForConnection(connectionStore.getConfig(queryEditorDdlTarget.value.connectionId)));
+  return codeMirrorSqlDialect(queryEditorDdlDatabaseType.value);
 });
 const connectionStats = computed(() => ({
   total: connectionStore.connections.length,
@@ -1085,7 +1088,19 @@ async function newQuery() {
   const conn = connectionStore.getConfig(target.connectionId);
   if (!conn) return;
   connectionStore.activeConnectionId = target.connectionId;
-  const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema);
+  // Prefill the editor with `SELECT * FROM <focused table>` when enabled and a
+  // table context (active data/structure tab or selected table node) is available.
+  // Built before createTab so the tab opens with the content directly (no flash).
+  const initialSql = resolveNewQueryInitialSql({
+    activeTab: activeTab.value,
+    selectedTreeNode: findTreeNodeById(connectionStore.treeNodes, connectionStore.selectedTreeNodeId),
+    preferredSource: newQueryContextSource.value,
+    prefillEnabled: settingsStore.editorSettings.prefillNewQueryWithSelect,
+    targetConnectionId: target.connectionId,
+    targetDatabase: target.database,
+    databaseType: effectiveDatabaseTypeForConnection(conn),
+  });
+  const tabId = queryStore.createTab(conn.id, target.database, undefined, "query", target.schema, initialSql);
   try {
     await connectionStore.ensureConnected(target.connectionId);
     if (target.shouldRefreshDefaultDatabase) {
@@ -2145,7 +2160,16 @@ onUnmounted(() => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <DdlViewDialog v-if="queryEditorDdlTarget" v-model:open="showQueryEditorDdlDialog" :connection-id="queryEditorDdlTarget.connectionId" :database="queryEditorDdlTarget.database" :schema="queryEditorDdlTarget.schema" :table-name="queryEditorDdlTarget.tableName" :dialect="queryEditorDdlDialect" />
+      <DdlViewDialog
+        v-if="queryEditorDdlTarget"
+        v-model:open="showQueryEditorDdlDialog"
+        :connection-id="queryEditorDdlTarget.connectionId"
+        :database="queryEditorDdlTarget.database"
+        :schema="queryEditorDdlTarget.schema"
+        :table-name="queryEditorDdlTarget.tableName"
+        :database-type="queryEditorDdlDatabaseType"
+        :dialect="queryEditorDdlDialect"
+      />
     </TooltipProvider>
   </div>
 </template>

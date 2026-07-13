@@ -345,9 +345,6 @@ pub fn build_data_grid_copy_insert_statement(options: DataGridCopyInsertStatemen
         })
         .collect();
 
-    if options.exclude_primary_keys && insert_columns.len() == insertable_columns.len() {
-        return None;
-    }
     if insert_columns.is_empty() || options.rows.is_empty() {
         return None;
     }
@@ -2192,6 +2189,31 @@ mod tests {
         assert_eq!(
             statement.as_deref(),
             Some("INSERT INTO `users` (`login_name`, `display_name`) VALUES\n('ada', 'Ada'),\n('linus', 'Linus');")
+        );
+    }
+
+    #[test]
+    fn builds_copy_insert_without_primary_keys_when_primary_keys_are_hidden() {
+        let statement = build_data_grid_copy_insert_statement(DataGridCopyInsertStatementOptions {
+            database_type: Some(DatabaseType::Mysql),
+            table_meta: Some(DataGridTableMeta {
+                catalog: None,
+                schema: None,
+                table_name: "users".to_string(),
+                primary_keys: vec!["id".to_string()],
+                columns: None,
+            }),
+            columns: vec!["login_name".to_string(), "display_name".to_string()],
+            column_types: None,
+            source_columns: None,
+            rows: vec![vec![json!("ada"), json!("Ada")]],
+            exclude_primary_keys: true,
+            insert_mode: DataGridCopyInsertMode::Merged,
+        });
+
+        assert_eq!(
+            statement.as_deref(),
+            Some("INSERT INTO `users` (`login_name`, `display_name`) VALUES ('ada', 'Ada');")
         );
     }
 

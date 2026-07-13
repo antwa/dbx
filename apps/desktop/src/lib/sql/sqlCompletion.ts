@@ -883,6 +883,8 @@ const POSTGRES_FUNCTION_SIGNATURES = new Map<string, string[]>([
 
 const MYSQL_FUNCTION_SIGNATURES = new Map<string, string[]>([
   ["DATE_FORMAT", ["date", "format"]],
+  ["FROM_UNIXTIME", ["unix_timestamp"]],
+  ["UNIX_TIMESTAMP", []],
   ["JSON_EXTRACT", ["json", "path"]],
   ["JSON_UNQUOTE", ["json"]],
   ["GROUP_CONCAT", ["expression"]],
@@ -1119,6 +1121,10 @@ export interface SqlCompletionItem {
   apply?: string;
   boost: number;
   exactMatch?: boolean;
+}
+
+export function shouldChainSqlCompletionAfterAccept(item: { type?: string; apply?: string }): boolean {
+  return item.type === "schema" && item.apply?.endsWith(".") === true;
 }
 
 export type SqlKeywordCase = "preserve" | "upper" | "lower";

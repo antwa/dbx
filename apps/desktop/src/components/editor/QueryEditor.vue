@@ -31,6 +31,7 @@ import {
   isSqlLikeCompletionStatement,
   recordCompletionSelection,
   shouldAutoOpenSqlCompletion,
+  shouldChainSqlCompletionAfterAccept,
   extractCteDefinitions,
 } from "@/lib/sql/sqlCompletion";
 import { sqlCompletionContextFromSemantic } from "@/lib/sql/semantic/completion";
@@ -58,6 +59,7 @@ import { normalizeShortcutSettings, shortcutToCodeMirrorKey } from "@/lib/editor
 import { trimmedSelectionLayer } from "@/lib/editor/codemirrorTrimmedSelectionLayer";
 import { selectionMatchOccurrences } from "@/lib/editor/codemirrorSelectionMatches";
 import { createInsertValueHintsExtension, requestInsertValueHintsRefresh } from "@/lib/editor/codemirrorInsertValueHints";
+import { focusEditorView } from "@/lib/editor/queryEditorFocus";
 import { createDbxCodeMirrorSqlDialect } from "@/lib/editor/codemirrorSqlDialect";
 import { startsQueryEditorRectangularSelection } from "@/lib/editor/queryEditorPointerSelection";
 import { isSchemaAware, isSingleDatabase, supportsSqlInListPaste } from "@/lib/database/databaseFeatureSupport";
@@ -82,6 +84,7 @@ const props = defineProps<{
   executionError?: string;
   executionErrorSql?: string;
   readOnly?: boolean;
+  autoFocus?: boolean;
   forceWordWrap?: boolean;
   hideExecutionControls?: boolean;
   initialViewport?: { scrollTop: number; scrollLeft: number };
@@ -209,6 +212,7 @@ let codeMirrorTheme: import("@codemirror/state").Compartment | null = null;
 let wordWrapComp: import("@codemirror/state").Compartment | null = null;
 let vimModeComp: import("@codemirror/state").Compartment | null = null;
 let closeBracketsComp: import("@codemirror/state").Compartment | null = null;
+let sqlLanguageComp: import("@codemirror/state").Compartment | null = null;
 let codeMirrorCloseBrackets: typeof import("@codemirror/autocomplete").closeBrackets | null = null;
 let codeMirrorCloseBracketsKeymap: readonly import("@codemirror/view").KeyBinding[] | null = null;
 let readOnlyComp: import("@codemirror/state").Compartment | null = null;
@@ -224,6 +228,7 @@ let dbxVimCommandsConfigured = false;
 let buildSqlDiagnosticExtension: (() => import("@codemirror/state").Extension) | null = null;
 let buildSqlSignatureExtension: (() => import("@codemirror/state").Extension) | null = null;
 let buildSqlCompletionExtension: (() => import("@codemirror/state").Extension) | null = null;
+let buildSqlLanguageExtension: (() => import("@codemirror/state").Extension) | null = null;
 let codeMirrorSnippetCompletion: typeof import("@codemirror/autocomplete").snippetCompletion;
 let codeMirrorCompletionStatus: typeof import("@codemirror/autocomplete").completionStatus | null = null;
 let codeMirrorAcceptCompletion: typeof import("@codemirror/autocomplete").acceptCompletion | null = null;
@@ -1758,8 +1763,8 @@ function isTypedCompletionActivation(explicit: boolean) {
   return explicit && typedCompletionActivationUntil >= Date.now();
 }
 
-function markCompletionAccepted() {
-  suppressNextSqlCompletionAutoStartUntil = Date.now() + 750;
+function markCompletionAccepted(item: QueryCompletionItem) {
+  suppressNextSqlCompletionAutoStartUntil = shouldChainSqlCompletionAfterAccept(item) ? 0 : Date.now() + 750;
   completionEpoch++;
 }
 
@@ -1816,7 +1821,7 @@ function completionOptionForItem(item: QueryCompletionItem) {
       ...completion,
       apply(view: EditorViewType, completionItem: unknown, from: number, to: number) {
         record();
-        markCompletionAccepted();
+        markCompletionAccepted(item);
         if (typeof originalApply === "function") {
           originalApply(view, completionItem as never, from, to);
         } else {
@@ -1837,7 +1842,7 @@ function completionOptionForItem(item: QueryCompletionItem) {
     boost: item.boost,
     apply(view: EditorViewType, _completionItem: unknown, from: number, to: number) {
       record();
-      markCompletionAccepted();
+      markCompletionAccepted(item);
       const insert = item.apply ?? item.label;
       if (codeMirrorInsertCompletionText) {
         view.dispatch(codeMirrorInsertCompletionText(view.state, insert, from, to));
@@ -2586,6 +2591,7 @@ onMounted(async () => {
   wordWrapComp = new Compartment();
   vimModeComp = new Compartment();
   closeBracketsComp = new Compartment();
+  sqlLanguageComp = new Compartment();
   codeMirrorCloseBrackets = closeBrackets;
   codeMirrorCloseBracketsKeymap = closeBracketsKeymap;
   readOnlyComp = new Compartment();
@@ -2700,7 +2706,7 @@ onMounted(async () => {
       override: [async (context: CompletionContext) => provideSqlCompletions(context)],
     });
 
-  const dialect = createDbxCodeMirrorSqlDialect(langSql, props.dialect);
+  buildSqlLanguageExtension = () => langSql.sql({ dialect: createDbxCodeMirrorSqlDialect(langSql, props.dialect, props.databaseType) });
 
   const initialSettings = settingsStore.editorSettings;
   const theme = await loadEditorTheme(initialSettings.theme, editorThemeAppearance(), getCurrentCustomThemeColors(), themePalette.value);
@@ -2856,7 +2862,7 @@ onMounted(async () => {
       // Vim must be mounted before DBX/default keymaps so normal-mode keys are handled first.
       vimModeComp.of(vimModeExtension(initialSettings.vimModeEnabled)),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap]),
-      langSql.sql({ dialect }),
+      sqlLanguageComp.of(buildSqlLanguageExtension()),
       tooltips({ parent: document.body }),
       completionComp.of(buildSqlCompletionExtension()),
       sqlCompletionTheme(EditorView),
@@ -3117,6 +3123,15 @@ onMounted(async () => {
   cachedCompletionObjects = [];
   scheduleSemanticDiagnostics();
 
+  if (props.autoFocus) {
+    // Query tabs opt in; shared editor instances must preserve the surrounding UI focus.
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        focusEditorView(view.value);
+      });
+    });
+  }
+
   // Ensure theme is applied with the latest settings after mount
   void nextTick(async () => {
     if (!view.value || !codeMirrorTheme) return;
@@ -3183,13 +3198,11 @@ watch(
   },
 );
 
-watch(
-  () => props.databaseType,
-  () => {
-    executableStatementRangeCache = null;
-    view.value?.dispatch({});
-  },
-);
+watch([() => props.databaseType, () => props.dialect], () => {
+  executableStatementRangeCache = null;
+  if (!view.value || !sqlLanguageComp || !buildSqlLanguageExtension) return;
+  view.value.dispatch({ effects: sqlLanguageComp.reconfigure(buildSqlLanguageExtension()) });
+});
 
 watch(
   () => props.forceWordWrap,
@@ -3368,8 +3381,7 @@ function restoreEditorSelection() {
 
 function restoreEditorFocus() {
   const focusEditorAcrossFrames = () => {
-    if (!view.value || view.value.hasFocus) return;
-    view.value.focus();
+    focusEditorView(view.value);
   };
   focusEditorAcrossFrames();
   nextTick(() => {
