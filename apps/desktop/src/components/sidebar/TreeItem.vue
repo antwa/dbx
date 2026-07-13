@@ -51,6 +51,7 @@ import {
   Check,
   UsersRound,
   Activity,
+  Gauge,
   CalendarClock,
   Lock,
   HardDriveDownload,
@@ -146,6 +147,7 @@ import { selectedTreeNodesInVisibleOrder as orderSelectedTreeNodes, treeSelectio
 import { connectionPasteTargetGroupId, selectedConnectionClipboardTargets, selectedConnectionDeleteTargets, selectedConnectionDuplicateTargets, selectedConnectionEditTarget } from "@/lib/sidebar/sidebarConnectionSelection";
 import { supportsDatabaseUserAdmin } from "@/lib/database/databaseUserAdmin";
 import { supportsProcessList } from "@/lib/database/mysqlProcessList";
+import { supportsServerDashboard } from "@/lib/database/mysqlServerStatus";
 import { canCloseSidebarDatabaseConnection, isSidebarDatabaseOpened } from "@/lib/sidebar/sidebarDatabaseOpenState";
 import { sidebarTreeContextKey } from "@/lib/sidebar/sidebarTreeContext";
 import { batchTableEmptyFeedback, runBatchTableEmpty } from "@/lib/sidebar/batchTableEmpty";
@@ -1161,6 +1163,18 @@ async function openProcessList() {
     await connectionStore.ensureConnected(node.connectionId);
     connectionStore.activeConnectionId = node.connectionId;
     queryStore.openProcessList(node.connectionId);
+  } catch (e: any) {
+    toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
+  }
+}
+
+async function openMysqlDashboard() {
+  const node = props.node;
+  if (!node.connectionId) return;
+  try {
+    await connectionStore.ensureConnected(node.connectionId);
+    connectionStore.activeConnectionId = node.connectionId;
+    queryStore.openMysqlDashboard(node.connectionId);
   } catch (e: any) {
     toast(t("connection.connectFailed", { message: translateBackendError(t, e?.message || String(e)) }), 5000);
   }
@@ -4711,6 +4725,9 @@ function treeItemMenuItems(): ContextMenuItem[] {
     }
     if (supportsProcessList(currentDatabaseType())) {
       items.push({ label: t("contextMenu.processList"), action: openProcessList, icon: Activity });
+    }
+    if (supportsServerDashboard(currentDatabaseType())) {
+      items.push({ label: t("contextMenu.serverDashboard"), action: openMysqlDashboard, icon: Gauge });
     }
     if (currentDatabaseType() === "dameng") {
       items.push({ label: t("contextMenu.damengJobAdmin"), action: openDamengJobAdmin, icon: CalendarClock });
