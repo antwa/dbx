@@ -147,7 +147,7 @@ import { selectedTreeNodesInVisibleOrder as orderSelectedTreeNodes, treeSelectio
 import { connectionPasteTargetGroupId, selectedConnectionClipboardTargets, selectedConnectionDeleteTargets, selectedConnectionDuplicateTargets, selectedConnectionEditTarget } from "@/lib/sidebar/sidebarConnectionSelection";
 import { supportsDatabaseUserAdmin } from "@/lib/database/databaseUserAdmin";
 import { supportsProcessList } from "@/lib/database/mysqlProcessList";
-import { supportsServerDashboard } from "@/lib/database/mysqlServerStatus";
+import { connectionSupportsServerDashboard } from "@/lib/database/mysqlServerStatus";
 import { canCloseSidebarDatabaseConnection, isSidebarDatabaseOpened } from "@/lib/sidebar/sidebarDatabaseOpenState";
 import { sidebarTreeContextKey } from "@/lib/sidebar/sidebarTreeContext";
 import { batchTableEmptyFeedback, runBatchTableEmpty } from "@/lib/sidebar/batchTableEmpty";
@@ -4726,7 +4726,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
     if (supportsProcessList(currentDatabaseType())) {
       items.push({ label: t("contextMenu.processList"), action: openProcessList, icon: Activity });
     }
-    if (supportsServerDashboard(currentDatabaseType())) {
+    if (node.connectionId && connectionSupportsServerDashboard(connectionStore.getConfig(node.connectionId))) {
       items.push({ label: t("contextMenu.serverDashboard"), action: openMysqlDashboard, icon: Gauge });
     }
     if (currentDatabaseType() === "dameng") {

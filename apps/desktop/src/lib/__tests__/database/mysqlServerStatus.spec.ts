@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueryResult } from "@/types/database";
-import { computeQps, computeRate, formatBytes, formatBytesPerSec, formatUptime, innodbBufferHitRatio, parseStatusResult, statusNumber, supportsServerDashboard, type StatusSample } from "@/lib/database/mysqlServerStatus";
+import { computeQps, computeRate, connectionSupportsServerDashboard, formatBytes, formatBytesPerSec, formatUptime, innodbBufferHitRatio, parseStatusResult, statusNumber, supportsServerDashboard, type StatusSample } from "@/lib/database/mysqlServerStatus";
 
 function statusResult(rows: [string, string][]): QueryResult {
   return { columns: ["Variable_name", "Value"], rows, affected_rows: 0, execution_time_ms: 0 };
@@ -99,5 +99,12 @@ describe("supportsServerDashboard", () => {
     expect(supportsServerDashboard("goldendb")).toBe(false);
     expect(supportsServerDashboard("postgres")).toBe(false);
     expect(supportsServerDashboard(undefined)).toBe(false);
+  });
+
+  it("rejects JDBC profiles that only use the MySQL-compatible dialect", () => {
+    expect(connectionSupportsServerDashboard({ id: "mysql", name: "MySQL", db_type: "mysql" } as any)).toBe(true);
+    expect(connectionSupportsServerDashboard({ id: "jdbc-mysql", name: "JDBC MySQL", db_type: "jdbc", connection_string: "jdbc:mysql://localhost/db" } as any)).toBe(true);
+    expect(connectionSupportsServerDashboard({ id: "kyuubi", name: "Kyuubi", db_type: "jdbc", driver_profile: "kyuubi", connection_string: "jdbc:hive2://localhost/default" } as any)).toBe(false);
+    expect(connectionSupportsServerDashboard({ id: "hive", name: "Hive", db_type: "jdbc", jdbc_driver_class: "org.apache.hive.jdbc.HiveDriver" } as any)).toBe(false);
   });
 });

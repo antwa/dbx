@@ -154,9 +154,8 @@ async function handleRefresh() {
 }
 
 onMounted(async () => {
-  await connectionStore.ensureConnected(props.connectionId);
-  await fetchVariables();
   await fetchStatus();
+  if (!error.value) await fetchVariables();
   startAutoRefresh();
 });
 

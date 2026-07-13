@@ -1,4 +1,5 @@
-import type { DatabaseType, QueryResult } from "@/types/database";
+import type { ConnectionConfig, DatabaseType, QueryResult } from "@/types/database";
+import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 
 /**
  * MySQL server-monitoring helpers. Pure and framework-free so the rate math and
@@ -139,4 +140,14 @@ export function formatUptime(seconds: number): string {
 /** Whether the given database type exposes the server dashboard (MySQL family). */
 export function supportsServerDashboard(dbType: DatabaseType | undefined): boolean {
   return !!dbType && SERVER_DASHBOARD_DB_TYPES.has(dbType);
+}
+
+/** Prevent JDBC profiles that only borrow MySQL SQL syntax from exposing MySQL server administration queries. */
+export function connectionSupportsServerDashboard(connection: ConnectionConfig | undefined): boolean {
+  if (!connection || !supportsServerDashboard(effectiveDatabaseTypeForConnection(connection))) return false;
+  if (connection.db_type !== "jdbc") return true;
+  const profile = [connection.driver_profile, connection.connection_string, connection.jdbc_driver_class, ...(connection.jdbc_driver_paths ?? [])]
+    .filter(Boolean)
+    .join("\n");
+  return !/(?:kyuubi|hive2|org\.apache\.hive\.jdbc\.HiveDriver|hive-jdbc)/i.test(profile);
 }
