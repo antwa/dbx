@@ -1045,7 +1045,7 @@ export const useConnectionStore = defineStore("connection", () => {
   }
 
   function objectGroupCacheKey(node: TreeNode): string {
-    return schemaCacheKey(node.connectionId || "", node.database || "", node.schema || "", node.type, "objects-v3");
+    return schemaCacheKey(node.connectionId || "", node.database || "", node.schema || "", node.type, "objects-v4");
   }
 
   function metadataListDriverProfile(connectionId?: string): string | undefined {
@@ -2991,7 +2991,7 @@ export const useConnectionStore = defineStore("connection", () => {
           await ensureConnected(connectionId);
           if (useCachedChildren(node, options)) return;
           const searchFilter = activeTreeLoadSearchFilter(options);
-          const cacheKey = schemaCacheKey(connectionId, `doris-catalog:${catalog}`, database, "objects-simple-v3");
+          const cacheKey = schemaCacheKey(connectionId, `doris-catalog:${catalog}`, database, "objects-simple-v4");
           if (!options?.force && !searchFilter) {
             const cached = await loadPersistedTreeChildren(node, cacheKey);
             if (cached.hit) {
@@ -3064,7 +3064,7 @@ export const useConnectionStore = defineStore("connection", () => {
           await ensureConnected(connectionId);
           if (useCachedChildren(node, options)) return;
           const simpleObjectDisplay = useSettingsStore().editorSettings.sidebarObjectDisplay === "simple";
-          const cacheKey = schemaCacheKey(connectionId, database, schema || "", simpleObjectDisplay ? "objects-simple-v3" : "objects-grouped-v3");
+          const cacheKey = schemaCacheKey(connectionId, database, schema || "", simpleObjectDisplay ? "objects-simple-v4" : "objects-grouped-v4");
           const searchFilter = activeTreeLoadSearchFilter(options);
           const isSidebarTableSearch = !!options?.sidebarTableSearchParentId;
           if (!options?.force && !searchFilter) {
@@ -3322,7 +3322,7 @@ export const useConnectionStore = defineStore("connection", () => {
             if (!canApplyTreeMetadataResult(parent)) return;
             parent.objectCount = mergedChildren.length;
             setChildren(parent, nextChildren);
-            await savePersistedTreeChildren(schemaCacheKey(parentConnectionId, parentDatabase, parent.schema || "", "objects-simple-v3"), nextChildren);
+            await savePersistedTreeChildren(schemaCacheKey(parentConnectionId, parentDatabase, parent.schema || "", "objects-simple-v4"), nextChildren);
             parent.isExpanded = true;
             return;
           }
