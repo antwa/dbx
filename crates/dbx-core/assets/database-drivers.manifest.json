@@ -27,7 +27,6 @@
         "fieldLineage": true,
         "sqlExplain": true,
         "userAdmin": true,
-        "processList": true,
         "driverManagement": false
       }
     },
@@ -498,7 +497,6 @@
         "fieldLineage": false,
         "sqlExplain": false,
         "userAdmin": false,
-        "processList": true,
         "driverManagement": false
       }
     },
@@ -528,7 +526,6 @@
         "fieldLineage": false,
         "sqlExplain": false,
         "userAdmin": false,
-        "processList": true,
         "driverManagement": false
       }
     },
@@ -737,7 +734,6 @@
         "fieldLineage": false,
         "sqlExplain": false,
         "userAdmin": true,
-        "processList": true,
         "driverManagement": true
       }
     },

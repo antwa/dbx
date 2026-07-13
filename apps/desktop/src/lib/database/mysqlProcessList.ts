@@ -1,5 +1,11 @@
 import type { DatabaseType, QueryResult } from "@/types/database";
-import { supportsDatabaseFeature } from "@/lib/database/databaseDriverManifest";
+
+/**
+ * Engines that speak the MySQL protocol and support `SHOW FULL PROCESSLIST` /
+ * `KILL CONNECTION`. MariaDB, TiDB, and OceanBase ride the `mysql` dbType via a
+ * driver profile, so they are covered by the `"mysql"` entry.
+ */
+const PROCESS_LIST_DB_TYPES = new Set<DatabaseType>(["mysql", "doris", "starrocks", "goldendb"]);
 
 /**
  * MySQL "current connections / process list" helpers. Pure and framework-free so
@@ -106,5 +112,5 @@ export function clampInterval(seconds: number): number {
 
 /** Whether the given database type exposes a process-list viewer (MySQL family). */
 export function supportsProcessList(dbType: DatabaseType | undefined): boolean {
-  return !!dbType && supportsDatabaseFeature(dbType, "processList");
+  return !!dbType && PROCESS_LIST_DB_TYPES.has(dbType);
 }
