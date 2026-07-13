@@ -146,8 +146,6 @@ export function supportsServerDashboard(dbType: DatabaseType | undefined): boole
 export function connectionSupportsServerDashboard(connection: ConnectionConfig | undefined): boolean {
   if (!connection || !supportsServerDashboard(effectiveDatabaseTypeForConnection(connection))) return false;
   if (connection.db_type !== "jdbc") return true;
-  const profile = [connection.driver_profile, connection.connection_string, connection.jdbc_driver_class, ...(connection.jdbc_driver_paths ?? [])]
-    .filter(Boolean)
-    .join("\n");
+  const profile = [connection.driver_profile, connection.connection_string, connection.jdbc_driver_class, ...(connection.jdbc_driver_paths ?? [])].filter(Boolean).join("\n");
   return !/(?:kyuubi|hive2|org\.apache\.hive\.jdbc\.HiveDriver|hive-jdbc)/i.test(profile);
 }
