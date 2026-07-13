@@ -481,6 +481,116 @@ test("copy row as INSERT works without prior prefetch (first context-menu click)
   assert.equal(composable.canCopyPreparedInsert(false), true);
 });
 
+test("copy row as INSERT without primary keys works without prior prefetch", async () => {
+  const contextCell = ref({ rowId: 1, rowIndex: 0, col: 0 });
+  const row = {
+    id: 1,
+    data: [1, "alice"],
+    isNew: false,
+    isDeleted: false,
+    isDirtyCol: [false, false],
+    status: "",
+  };
+  apiMock.buildDataGridCopyInsertStatement.mockResolvedValueOnce("INSERT INTO users (name) VALUES ('alice');");
+  const composable = useDataGridExport({
+    columns: computed(() => ["id", "name"]),
+    displayItems: computed(() => [row]),
+    sql: computed(() => undefined),
+    tableMeta: computed(() => ({
+      tableName: "users",
+      primaryKeys: ["id"],
+    })),
+    databaseType: computed(() => "mysql"),
+    connectionId: computed(() => "conn-1"),
+    database: computed(() => "db"),
+    context: computed(() => "table-data"),
+    sourceColumns: computed(() => undefined),
+    columnTypes: computed(() => undefined),
+    whereInput: computed(() => undefined),
+    orderBy: computed(() => undefined),
+    exportBatchSize: computed(() => 1000),
+    hasCellSelection: computed(() => false),
+    selectedCells: computed(() => ({ columns: [], rows: [] })),
+    selectedRange: computed(() => null),
+    contextCell,
+    getRowItem: () => row,
+    selectedRowIds: ref(new Set<number>()),
+    hasRowSelection: computed(() => false),
+  });
+
+  assert.equal(composable.canCopyRowAsInsertWithoutPrimaryKeys.value, true);
+  assert.equal(composable.canCopyPreparedInsert(true), false);
+
+  await composable.copyRowAsInsertWithoutPrimaryKeys();
+
+  assert.deepEqual(apiMock.buildDataGridCopyInsertStatement.mock.calls[0][0], {
+    databaseType: "mysql",
+    tableMeta: { tableName: "users", primaryKeys: ["id"] },
+    columns: ["id", "name"],
+    columnTypes: undefined,
+    sourceColumns: undefined,
+    rows: [[1, "alice"]],
+    excludePrimaryKeys: true,
+    insertMode: "merged",
+  });
+  assert.equal(clipboardMock.copyToClipboard.mock.calls[0][0], "INSERT INTO users (name) VALUES ('alice');");
+  assert.equal(composable.canCopyPreparedInsert(true), true);
+});
+
+test("copy row as INSERT without primary keys remains available when the primary key is hidden", async () => {
+  const contextCell = ref({ rowId: 1, rowIndex: 0, col: 0 });
+  const row = {
+    id: 1,
+    data: ["alice", "active"],
+    isNew: false,
+    isDeleted: false,
+    isDirtyCol: [false, false],
+    status: "",
+  };
+  apiMock.buildDataGridCopyInsertStatement.mockResolvedValueOnce("INSERT INTO users (name, status) VALUES ('alice', 'active');");
+  const composable = useDataGridExport({
+    columns: computed(() => ["name", "status"]),
+    displayItems: computed(() => [row]),
+    sql: computed(() => "SELECT name, status FROM users"),
+    tableMeta: computed(() => ({
+      tableName: "users",
+      primaryKeys: ["id"],
+    })),
+    databaseType: computed(() => "mysql"),
+    connectionId: computed(() => "conn-1"),
+    database: computed(() => "db"),
+    context: computed(() => "results"),
+    sourceColumns: computed(() => ["name", "status"]),
+    columnTypes: computed(() => undefined),
+    whereInput: computed(() => undefined),
+    orderBy: computed(() => undefined),
+    exportBatchSize: computed(() => 1000),
+    hasCellSelection: computed(() => false),
+    selectedCells: computed(() => ({ columns: [], rows: [] })),
+    selectedRange: computed(() => null),
+    contextCell,
+    getRowItem: () => row,
+    selectedRowIds: ref(new Set<number>()),
+    hasRowSelection: computed(() => false),
+  });
+
+  assert.equal(composable.canCopyRowAsInsertWithoutPrimaryKeys.value, true);
+
+  await composable.copyRowAsInsertWithoutPrimaryKeys();
+
+  assert.deepEqual(apiMock.buildDataGridCopyInsertStatement.mock.calls[0][0], {
+    databaseType: "mysql",
+    tableMeta: { tableName: "users", primaryKeys: ["id"] },
+    columns: ["name", "status"],
+    columnTypes: undefined,
+    sourceColumns: ["name", "status"],
+    rows: [["alice", "active"]],
+    excludePrimaryKeys: true,
+    insertMode: "merged",
+  });
+  assert.equal(clipboardMock.copyToClipboard.mock.calls[0][0], "INSERT INTO users (name, status) VALUES ('alice', 'active');");
+});
+
 test("default data grid export file names use sanitized base names and compact local timestamps", () => {
   vi.useFakeTimers();
   try {

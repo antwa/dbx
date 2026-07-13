@@ -607,9 +607,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
     if (!tableMeta.value?.primaryKeys.length) return false;
     const rows = insertEligibleRows();
     if (!rows.length) return false;
-    const insertableCount = insertableCopyColumnCount(false);
-    const insertColumnsCount = insertableCopyColumnCount(true);
-    return insertColumnsCount > 0 && insertColumnsCount < insertableCount;
+    return insertableCopyColumnCount(true) > 0;
   });
 
   async function copyAll() {
