@@ -5,7 +5,7 @@ import type { DatabaseType, QueryResult } from "@/types/database";
  * `KILL CONNECTION`. MariaDB, TiDB, and OceanBase ride the `mysql` dbType via a
  * driver profile, so they are covered by the `"mysql"` entry.
  */
-const PROCESS_LIST_DB_TYPES = new Set<DatabaseType>(["mysql", "doris", "starrocks", "goldendb"]);
+const PROCESS_LIST_DB_TYPES = new Set<DatabaseType>(["mysql"]);
 
 /**
  * MySQL "current connections / process list" helpers. Pure and framework-free so

@@ -64,10 +64,11 @@ describe("clampInterval", () => {
 });
 
 describe("supportsProcessList", () => {
-  it("is true for MySQL-family engines and false otherwise", () => {
+  it("is limited to connections using the MySQL driver type", () => {
     expect(supportsProcessList("mysql")).toBe(true);
-    expect(supportsProcessList("doris")).toBe(true);
-    expect(supportsProcessList("goldendb")).toBe(true);
+    expect(supportsProcessList("doris")).toBe(false);
+    expect(supportsProcessList("starrocks")).toBe(false);
+    expect(supportsProcessList("goldendb")).toBe(false);
     expect(supportsProcessList("postgres")).toBe(false);
     expect(supportsProcessList("sqlite")).toBe(false);
     expect(supportsProcessList(undefined)).toBe(false);
