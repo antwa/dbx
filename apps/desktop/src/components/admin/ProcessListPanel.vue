@@ -44,6 +44,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 
 const killTarget = ref<ProcessRow | null>(null);
 const killing = ref(false);
+const fallbackListSql = ref<string | null>(null);
 
 // Full-text preview for long cells (SQL statement / info), opened by clicking them.
 const previewText = ref<string | null>(null);
@@ -106,7 +107,16 @@ async function load(options: { silent?: boolean } = {}) {
         // Non-fatal: without our own id we simply cannot dim the self row.
       }
     }
-    const result = await api.executeQuery(props.connection.id, "", activeDriver.listSql, undefined, undefined, { maxRows: activeDriver.maxRows });
+    const listSql = fallbackListSql.value ?? activeDriver.listSql;
+    let result;
+    try {
+      result = await api.executeQuery(props.connection.id, "", listSql, undefined, undefined, { maxRows: activeDriver.maxRows });
+    } catch (error) {
+      if (fallbackListSql.value || !activeDriver.fallbackListSql || !activeDriver.shouldUseFallbackListSql?.(error)) throw error;
+      result = await api.executeQuery(props.connection.id, "", activeDriver.fallbackListSql, undefined, undefined, { maxRows: activeDriver.maxRows });
+      // Cache the compatible query so old servers do not fail once per refresh.
+      fallbackListSql.value = activeDriver.fallbackListSql;
+    }
     rows.value = activeDriver.mapRows(result);
     truncated.value = result.truncated === true;
   } catch (error: any) {
@@ -143,6 +153,8 @@ async function confirmKill() {
     if (result === undefined) return;
     const executionError = processListExecutionError(result);
     if (executionError) throw new Error(executionError);
+    const killResultError = activeDriver.killResultError?.(result);
+    if (killResultError) throw new Error(killResultError);
     toast(t("processList.killSuccess", { id: target.id }), 2500);
     killTarget.value = null;
     await load({ silent: true });

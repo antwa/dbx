@@ -29,6 +29,19 @@ export const PG_PROCESS_LIST_SQL = `SELECT pid,
 FROM pg_stat_activity
 ORDER BY time DESC NULLS LAST`;
 
+/** PostgreSQL 9.2-9.5 expose `waiting` instead of wait-event detail columns. */
+export const PG_PROCESS_LIST_LEGACY_SQL = `SELECT pid,
+       usename AS "user",
+       datname AS db,
+       coalesce(host(client_addr), client_hostname, 'local') AS client,
+       application_name AS app,
+       state,
+       CASE WHEN waiting THEN 'Lock' ELSE '' END AS wait,
+       floor(extract(epoch FROM (now() - coalesce(query_start, xact_start, backend_start))))::bigint AS time,
+       query
+FROM pg_stat_activity
+ORDER BY time DESC NULLS LAST`;
+
 /** Scalar query that returns the viewer's own backend pid. */
 export const PG_OWN_SESSION_SQL = "SELECT pg_backend_pid()";
 
@@ -109,6 +122,22 @@ export function buildPgKillSql(pid: number): string {
     throw new Error(`Invalid backend pid: ${pid}`);
   }
   return `SELECT pg_terminate_backend(${pid})`;
+}
+
+/** Return an error when PostgreSQL declines to terminate the target backend. */
+export function pgKillResultError(results: QueryResult[]): string | null {
+  const result = results.find((item) => item.execution_error !== true);
+  const value = result?.rows?.[0]?.[0];
+  if (value === true || value === 1 || String(value).toLowerCase() === "t" || String(value).toLowerCase() === "true") return null;
+  return "pg_terminate_backend did not terminate the backend";
+}
+
+/** Detect the undefined-column failure produced by pre-9.6 pg_stat_activity. */
+export function isPgProcessListCompatibilityError(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  if (code === "42703") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:wait_event_type|wait_event).*(?:does not exist|42703)|(?:does not exist|42703).*(?:wait_event_type|wait_event)/i.test(message);
 }
 
 /** Whether the given database type exposes the Postgres process-list viewer. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QueryResult } from "@/types/database";
-import { buildPgKillSql, mapPgProcessRows, supportsPgProcessList } from "@/lib/database/postgresProcessList";
+import { buildPgKillSql, isPgProcessListCompatibilityError, mapPgProcessRows, pgKillResultError, PG_PROCESS_LIST_LEGACY_SQL, PG_PROCESS_LIST_SQL, supportsPgProcessList } from "@/lib/database/postgresProcessList";
 import { connectionSupportsProcessList, resolveProcessListDriver, resolveProcessListDriverForConnection, supportsProcessList } from "@/lib/database/processListDrivers";
 import type { ConnectionConfig } from "@/types/database";
 
@@ -51,6 +51,24 @@ describe("buildPgKillSql", () => {
   });
 });
 
+describe("Postgres compatibility", () => {
+  it("provides a pre-9.6 query and only falls back for missing wait-event columns", () => {
+    expect(PG_PROCESS_LIST_SQL).toContain("wait_event_type");
+    expect(PG_PROCESS_LIST_LEGACY_SQL).toContain("CASE WHEN waiting THEN 'Lock'");
+    expect(PG_PROCESS_LIST_LEGACY_SQL).not.toContain("wait_event_type");
+    expect(isPgProcessListCompatibilityError(new Error('column "wait_event_type" does not exist'))).toBe(true);
+    expect(isPgProcessListCompatibilityError({ code: "42703" })).toBe(true);
+    expect(isPgProcessListCompatibilityError(new Error("permission denied for view pg_stat_activity"))).toBe(false);
+  });
+
+  it("requires pg_terminate_backend to confirm termination", () => {
+    expect(pgKillResultError([result(["pg_terminate_backend"], [[true]])])).toBeNull();
+    expect(pgKillResultError([result(["pg_terminate_backend"], [["t"]])])).toBeNull();
+    expect(pgKillResultError([result(["pg_terminate_backend"], [[false]])])).toContain("did not terminate");
+    expect(pgKillResultError([result(["pg_terminate_backend"], [])])).toContain("did not terminate");
+  });
+});
+
 describe("supportsPgProcessList", () => {
   it("covers the Postgres-kernel family and excludes divergent wire-protocol engines", () => {
     expect(supportsPgProcessList("postgres")).toBe(true);
@@ -70,6 +88,9 @@ describe("resolveProcessListDriver", () => {
     const postgres = resolveProcessListDriver("postgres");
     expect(mysql?.buildKillSql(7)).toBe("KILL CONNECTION 7");
     expect(postgres?.buildKillSql(7)).toBe("SELECT pg_terminate_backend(7)");
+    expect(postgres?.fallbackListSql).toBe(PG_PROCESS_LIST_LEGACY_SQL);
+    expect(postgres?.shouldUseFallbackListSql?.(new Error('column "wait_event" does not exist'))).toBe(true);
+    expect(postgres?.killResultError?.([result(["pg_terminate_backend"], [[false]])])).toContain("did not terminate");
     expect(resolveProcessListDriver("sqlite")).toBeNull();
   });
 

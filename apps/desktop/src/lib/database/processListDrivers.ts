@@ -1,7 +1,7 @@
 import type { ConnectionConfig, DatabaseType, QueryResult } from "@/types/database";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { buildKillSql as buildMysqlKillSql, mapProcessRows as mapMysqlProcessRows, PROCESS_LIST_SQL as MYSQL_PROCESS_LIST_SQL, supportsProcessList as supportsMysqlProcessList } from "./mysqlProcessList";
-import { buildPgKillSql, mapPgProcessRows, PG_OWN_SESSION_SQL, PG_PROCESS_LIST_SQL, supportsPgProcessList } from "./postgresProcessList";
+import { buildPgKillSql, isPgProcessListCompatibilityError, mapPgProcessRows, pgKillResultError, PG_OWN_SESSION_SQL, PG_PROCESS_LIST_LEGACY_SQL, PG_PROCESS_LIST_SQL, supportsPgProcessList } from "./postgresProcessList";
 
 /**
  * Engine-agnostic process-list model. Each supported engine contributes a driver
@@ -28,6 +28,10 @@ export interface ProcessColumn {
 export interface ProcessListDriver {
   /** SQL that lists current sessions, one row each. */
   listSql: string;
+  /** Compatibility query used when the primary list SQL references newer columns. */
+  fallbackListSql?: string;
+  /** Restrict fallback attempts to known version-compatibility failures. */
+  shouldUseFallbackListSql?(error: unknown): boolean;
   /** Scalar SQL returning the caller's own session id (nullable path tolerated). */
   ownSessionSql: string;
   /** Columns to render, in display order. */
@@ -40,6 +44,8 @@ export interface ProcessListDriver {
   mapRows(result: QueryResult | null | undefined): ProcessRow[];
   /** Build the validated statement that kills the given session id. */
   buildKillSql(id: number): string;
+  /** Validate any engine-specific success value returned by the kill statement. */
+  killResultError?(results: QueryResult[]): string | null;
 }
 
 const MYSQL_COLUMNS: ProcessColumn[] = [
@@ -78,12 +84,15 @@ const MYSQL_DRIVER: ProcessListDriver = {
 
 const POSTGRES_DRIVER: ProcessListDriver = {
   listSql: PG_PROCESS_LIST_SQL,
+  fallbackListSql: PG_PROCESS_LIST_LEGACY_SQL,
+  shouldUseFallbackListSql: isPgProcessListCompatibilityError,
   ownSessionSql: PG_OWN_SESSION_SQL,
   columns: POSTGRES_COLUMNS,
   defaultSortKey: "time",
   maxRows: 5000,
   mapRows: (result) => mapPgProcessRows(result) as unknown as ProcessRow[],
   buildKillSql: buildPgKillSql,
+  killResultError: pgKillResultError,
 };
 
 /** Resolve the process-list driver for a connection, or null if unsupported. */
