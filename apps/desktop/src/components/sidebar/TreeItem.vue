@@ -146,7 +146,7 @@ import { shouldMeasureSidebarLabelOverflow } from "@/lib/sidebar/sidebarLabelToo
 import { selectedTreeNodesInVisibleOrder as orderSelectedTreeNodes, treeSelectionRangeIdsByIndex, treeSelectionRangeIds } from "@/lib/sidebar/sidebarTreeSelection";
 import { connectionPasteTargetGroupId, selectedConnectionClipboardTargets, selectedConnectionDeleteTargets, selectedConnectionDuplicateTargets, selectedConnectionEditTarget } from "@/lib/sidebar/sidebarConnectionSelection";
 import { supportsDatabaseUserAdmin } from "@/lib/database/databaseUserAdmin";
-import { supportsProcessList } from "@/lib/database/mysqlProcessList";
+import { connectionSupportsProcessList } from "@/lib/database/processListDrivers";
 import { connectionSupportsServerDashboard } from "@/lib/database/mysqlServerStatus";
 import { canCloseSidebarDatabaseConnection, isSidebarDatabaseOpened } from "@/lib/sidebar/sidebarDatabaseOpenState";
 import { sidebarTreeContextKey } from "@/lib/sidebar/sidebarTreeContext";
@@ -4727,7 +4727,7 @@ function treeItemMenuItems(): ContextMenuItem[] {
     if (supportsDatabaseUserAdmin(currentDatabaseType())) {
       items.push({ label: t("contextMenu.userAdmin"), action: openUserAdmin, icon: UsersRound });
     }
-    if (supportsProcessList(currentDatabaseType())) {
+    if (node.connectionId && connectionSupportsProcessList(connectionStore.getConfig(node.connectionId))) {
       items.push({ label: t("contextMenu.processList"), action: openProcessList, icon: Activity });
     }
     if (node.connectionId && connectionSupportsServerDashboard(connectionStore.getConfig(node.connectionId))) {

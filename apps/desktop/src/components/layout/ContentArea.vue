@@ -54,7 +54,7 @@ const NacosAdminConsole = defineAsyncComponent(() => import("@/components/nacos/
 const ObjectBrowser = defineAsyncComponent(() => import("@/components/objects/ObjectBrowser.vue"));
 const TableStructureEditor = defineAsyncComponent(() => import("@/components/structure/TableStructureEditor.vue"));
 const DatabaseUserAdmin = defineAsyncComponent(() => import("@/components/admin/DatabaseUserAdmin.vue"));
-const MySqlProcessList = defineAsyncComponent(() => import("@/components/admin/MySqlProcessList.vue"));
+const ProcessListPanel = defineAsyncComponent(() => import("@/components/admin/ProcessListPanel.vue"));
 const MySqlDashboard = defineAsyncComponent(() => import("@/components/admin/MySqlDashboard.vue"));
 const DamengJobAdmin = defineAsyncComponent(() => import("@/components/admin/DamengJobAdmin.vue"));
 const ExplainPlanViewer = defineAsyncComponent(() => import("@/components/explain/ExplainPlanViewer.vue"));
@@ -1595,7 +1595,7 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
     </template>
 
     <template v-else-if="activeTab.mode === 'processlist' && activeConnection">
-      <MySqlProcessList :key="activeTab.id" :connection="activeConnection" />
+      <ProcessListPanel :key="activeTab.id" :connection="activeConnection" />
     </template>
 
     <template v-else-if="activeTab.mode === 'mysql-dashboard'">
