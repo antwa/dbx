@@ -179,6 +179,7 @@ pub async fn disconnect_db(
     if !should_disconnect {
         return Ok(Json(()));
     }
+    app.running_queries.cancel_connection(&body.connection_id);
     app.remove_connection_pools_detached(&body.connection_id).await;
     app.nacos_registry.drop_connection(&body.connection_id).await;
     #[cfg(feature = "mq-admin")]

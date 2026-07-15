@@ -80,6 +80,7 @@ import { buildTableDeleteTemplate, buildTableInsertTemplate, buildTableSelectTem
 import { connectionFilePath, defaultSqliteBackupFileName, isMemorySqlitePath, sqliteBackupSourcePath } from "@/lib/connection/connectionFile";
 import { driverStoreFocusForInstallError } from "@/lib/connection/agentDriverInstallHint";
 import { revealPathInFileManager } from "@/lib/backend/tauri";
+import { appendDebugLog, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 import { clearActiveTableReferencePayload, createTableReferencePayload, createTableReferenceDropEvent, setActiveTableReferencePayload, type QueryEditorTableReferencePayload } from "@/lib/editor/queryEditorTableDrop";
 import { usesSyntheticRowIdKey } from "@/lib/table/tableEditing";
 import { tableOpenPageLimit } from "@/lib/table/tableOpenPageLimit";
@@ -354,7 +355,7 @@ const emit = defineEmits<{
   "open-ddl": [node: TreeNode];
   "open-object-source": [node: TreeNode, initialEditing: boolean];
   "open-procedure": [node: TreeNode];
-  "open-data": [node: TreeNode, requireSelection: boolean, runner: (node: TreeNode, request: SidebarDataOpenRequest) => Promise<void>];
+  "open-data": [node: TreeNode, requireSelection: boolean, openMode: DataTabOpenMode, runner: (node: TreeNode, request: SidebarDataOpenRequest) => Promise<void>];
   "open-visible-databases": [node: TreeNode];
   "open-visible-schemas": [node: TreeNode];
   "open-danger-dialog": [request: SidebarDangerDialogRequest];
@@ -1353,15 +1354,15 @@ async function openDamengJobAdmin() {
 }
 
 function scheduleOpenData(node: TreeNode) {
-  emit("open-data", node, true, openData);
+  emit("open-data", node, true, "default", openData);
 }
 
 function openDataImmediately(node: TreeNode = props.node) {
-  emit("open-data", node, false, openData);
+  emit("open-data", node, false, "default", openData);
 }
 
 function openDataInNewTabImmediately(node: TreeNode = props.node) {
-  emit("open-data", node, false, (target, request) => openData(target, request, "new-tab"));
+  emit("open-data", node, false, "new-tab", (target, request) => openData(target, request, "new-tab"));
 }
 
 async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMode: DataTabOpenMode = "default") {
@@ -1371,9 +1372,12 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
   const startedAt = performance.now();
   let lastPhaseAt = startedAt;
   const elapsed = () => `${Math.round(performance.now() - startedAt)}ms`;
+  const openDataLog = (level: "info" | "warn" | "error" | "debug", event: string, details: Record<string, unknown>) => {
+    appendDebugLog(level, `[DBX][openData:${event}]`, details);
+  };
   const logPhase = (phase: string, extra: Record<string, unknown> = {}) => {
     const now = performance.now();
-    console.info("[DBX][openData:phase]", {
+    openDataLog("info", "phase", {
       traceId,
       phase,
       deltaMs: Math.round(now - lastPhaseAt),
@@ -1382,14 +1386,11 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
     });
     lastPhaseAt = now;
   };
-  console.info("[DBX][openData:start]", {
+  openDataLog("info", "start", {
     traceId,
     type: node.type,
-    connectionId: node.connectionId,
-    database: node.database,
-    schema: node.schema,
-    table: node.label,
     dbType: config?.db_type,
+    openMode,
   });
   const tableSchema = connectionObjectTreeNodeSchema(config, node.database, node.schema);
   const tableType = node.type === "view" ? "VIEW" : node.type === "materialized_view" ? "MATERIALIZED_VIEW" : (node.tableType ?? "TABLE");
@@ -1445,7 +1446,7 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
     }
     return queryStore.createTab(node.connectionId, node.database, node.label, "data", tableSchema);
   })();
-  console.info("[DBX][openData:tab-created]", { traceId, tabId, elapsed: elapsed() });
+  openDataLog("info", "tab-created", { traceId, tabId, elapsed: elapsed() });
   logPhase("tab-created", { tabId });
 
   // Cancel any previous execution on this tab before starting a new one
@@ -1519,24 +1520,21 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
   };
 
   try {
-    console.info("[DBX][openData:ensure-connected:start]", { traceId, elapsed: elapsed() });
+    openDataLog("info", "ensure-connected:start", { traceId, elapsed: elapsed() });
     await connectionStore.ensureConnected(node.connectionId);
     if (!isActive()) {
       logPhase("superseded-after-ensure-connected", { tabId });
       return;
     }
-    console.info("[DBX][openData:ensure-connected:done]", { traceId, elapsed: elapsed() });
+    openDataLog("info", "ensure-connected:done", { traceId, elapsed: elapsed() });
     logPhase("ensure-connected", { tabId });
     if (!config) throw new Error("Connection config not found");
 
     const limit = tableOpenPageLimit();
     const refreshTableMetaInBackground = async () => {
       const metadataStartedAt = performance.now();
-      console.info("[DBX][openData:metadata:start]", {
+      openDataLog("info", "metadata:start", {
         traceId,
-        database: node.database,
-        schema: querySchema,
-        table: node.label,
         elapsed: elapsed(),
       });
       try {
@@ -1549,10 +1547,10 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
           databaseType: metadataDatabaseType,
           driverProfile: config.driver_profile || config.db_type,
           catalog: node.catalog,
-          traceLogger: (event) => console.debug("[DBX][openData:metadata:trace]", { sourceTraceId: traceId, ...event }),
+          traceLogger: isDebugLoggingEnabled() ? (event) => openDataLog("debug", "metadata:trace", { sourceTraceId: traceId, ...event }) : undefined,
         });
         if (!isCurrentDataTab()) {
-          console.info("[DBX][openData:metadata:stale]", {
+          openDataLog("info", "metadata:stale", {
             traceId,
             tabId,
             columnCount: loadedMetadata.metadata.columns.length,
@@ -1562,7 +1560,7 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
         }
         const nextTableMeta = tableMetadataToDataTabMeta(loadedMetadata.metadata, tableSchema);
         queryStore.setTableMeta(tabId, nextTableMeta);
-        console.info("[DBX][openData:metadata:done]", {
+        openDataLog("info", "metadata:done", {
           traceId,
           tabId,
           columnCount: nextTableMeta.columns.length,
@@ -1573,12 +1571,12 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
           metadataMs: Math.round(performance.now() - metadataStartedAt),
         });
       } catch (error) {
-        console.warn("[DBX][openData:metadata:error]", { traceId, tabId, elapsed: elapsed(), error });
+        openDataLog("warn", "metadata:error", { traceId, tabId, elapsed: elapsed(), error });
       }
     };
     const shouldRefreshTableMeta = !cachedTableMeta;
     if (cachedTableMeta) {
-      console.info("[DBX][openData:metadata:cache-hit]", {
+      openDataLog("info", "metadata:cache-hit", {
         traceId,
         tabId,
         columnCount: cachedTableMeta.columns.length,
@@ -1613,24 +1611,24 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
       limit,
       includeRowId,
     });
-    console.info("[DBX][openData:sql-built]", {
+    openDataLog("info", "sql-built", {
       traceId,
-      primaryKeys,
+      primaryKeyCount: primaryKeys.length,
       includeRowId,
-      sql,
+      sqlLength: sql.length,
       elapsed: elapsed(),
     });
     logPhase("sql-built", { tabId, columnCount: columns.length, primaryKeyCount: primaryKeys.length });
     queryStore.updateSql(tabId, sql);
     logPhase("sql-updated", { tabId });
 
-    console.info("[DBX][openData:execute:start]", { traceId, tabId, elapsed: elapsed() });
+    openDataLog("info", "execute:start", { traceId, tabId, elapsed: elapsed() });
     await queryStore.executeTabSql(tabId, sql, {
       sourceTraceId: traceId,
       skipEnsureConnected: true,
       pagination: { limit, offset: 0 },
     });
-    console.info("[DBX][openData:execute:done]", { traceId, tabId, elapsed: elapsed() });
+    openDataLog("info", "execute:done", { traceId, tabId, elapsed: elapsed() });
     logPhase("execute-tab-sql", { tabId });
     if (shouldRefreshTableMeta && isCurrentDataTab()) {
       void refreshTableMetaInBackground();
@@ -1641,7 +1639,7 @@ async function openData(node: TreeNode, request?: SidebarDataOpenRequest, openMo
       logPhase("superseded-after-error", { tabId });
       return;
     }
-    console.error("[DBX][openData:error]", { traceId, elapsed: elapsed(), error: e });
+    openDataLog("error", "error", { traceId, elapsed: elapsed(), error: e });
     logPhase("error", { tabId });
     queryStore.setErrorResult(tabId, e);
   }

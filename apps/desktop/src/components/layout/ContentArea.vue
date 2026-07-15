@@ -311,7 +311,10 @@ const activeQueryError = computed(() => {
   if (!result?.columns.includes("Error")) return "";
   return String(result.rows[0]?.[0] ?? "");
 });
-const hasQueryOutput = computed(() => !!props.activeTab.result || !!props.activeTab.explainPlan || !!props.activeTab.explainError || !!props.activeTab.explainTableResult || !!props.activeTab.explainTableError || props.activeTab.isExecuting === true || props.activeTab.isExplaining === true);
+const hasQueryOutput = computed(
+  () =>
+    !!props.activeTab.result || props.activeTab.resultEvicted === true || !!props.activeTab.explainPlan || !!props.activeTab.explainError || !!props.activeTab.explainTableResult || !!props.activeTab.explainTableError || props.activeTab.isExecuting === true || props.activeTab.isExplaining === true,
+);
 const visibleResultItems = computed(() => tabularResultItems(props.activeTab.results ?? (props.activeTab.result ? [props.activeTab.result] : undefined)));
 const tabularResults = computed(() => tabularResultItems(props.activeTab.results));
 const allResultExportSheets = computed(() =>
@@ -1196,6 +1199,12 @@ defineExpose({ focusSearch, refreshData, refreshQueryEditorCompletionCache, hand
                 :cancelling="activeTab.isCancelling"
                 @cancel="emit('cancel')"
               />
+              <div v-else-if="activeTab.resultEvicted && activeTab.resultCacheState === 'missing'" class="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+                <div>{{ t("editor.cachedResultUnavailable") }}</div>
+                <Button v-if="(activeTab.lastExecutedSql ?? activeTab.sql)?.trim()" variant="secondary" size="sm" @click="queryStore.reloadEvictedTab(activeTab.id, { reexecuteOnMissing: true })">
+                  {{ t("editor.reexecuteQuery") }}
+                </Button>
+              </div>
               <div v-else-if="!activeTab.result" class="flex-1 min-h-0 flex flex-col items-center justify-center gap-1 text-muted-foreground text-sm">
                 <div>{{ t("editor.pressToExecute", { mod: shortcutModifier }) }}</div>
                 <div>{{ t("editor.pressToSaveSql", { mod: shortcutModifier }) }}</div>

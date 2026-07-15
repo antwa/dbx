@@ -51,6 +51,7 @@ import { findDatabaseTreeNode } from "@/lib/sidebar/treeRefreshTarget";
 import { shouldMarkDisconnected } from "@/lib/connection/connectionHealth";
 import { connectionAttemptOriginalErrorMessage, connectionAttemptTimeoutMessage, connectionAttemptTimeoutMs } from "@/lib/connection/connectionAttemptTimeout";
 import { requiresSqlServerLegacyCompatibilityComponent, SQLSERVER_LEGACY_COMPATIBILITY_DRIVER_KEY } from "@/lib/connection/sqlServerLegacyCompatibility";
+import { deleteTabResultSnapshotsForOwner } from "@/lib/tabs/tabResultCache";
 import { connectionUsesVisibleSchemaFilter, filterDatabaseNamesForConnection, filterSchemaNamesForConnection, filterVisibleDatabaseNames, normalizeVisibleDatabaseSelection } from "@/lib/database/visibleDatabases";
 import {
   buildObjectGroupPlaceholderNodes,
@@ -1756,6 +1757,7 @@ export const useConnectionStore = defineStore("connection", () => {
     for (const id of removedIds) {
       invalidateCompletionCache(id);
       clearLoadedChildrenCache(id);
+      void deleteTabResultSnapshotsForOwner(id);
     }
   }
 

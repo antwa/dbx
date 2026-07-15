@@ -557,6 +557,7 @@ export interface QueryResultRun {
   resultTotalRowCountLoading?: boolean;
   resultSessionId?: string;
   resultAccessedAt?: number;
+  resultEstimatedBytes?: number;
   resultCacheKey?: string;
   resultCacheState?: "memory" | "disk" | "missing";
   resultEvicted?: boolean;
@@ -780,6 +781,7 @@ export interface QueryTab {
   resultTotalRowCountLoading?: boolean;
   resultSessionId?: string;
   resultAccessedAt?: number;
+  resultEstimatedBytes?: number;
   resultCacheKey?: string;
   resultCacheState?: "memory" | "disk" | "missing";
   pinned?: boolean;

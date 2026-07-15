@@ -1282,6 +1282,7 @@ pub async fn disconnect_db(
     if !should_disconnect {
         return Ok(());
     }
+    state.running_queries.cancel_connection(&connection_id);
     state.remove_connection_pools_detached(&connection_id).await;
     drop_nacos_adapters_for_connection_ids(state.inner(), std::slice::from_ref(&connection_id)).await;
     drop_mq_adapters_for_connection_ids(state.inner(), std::slice::from_ref(&connection_id)).await;

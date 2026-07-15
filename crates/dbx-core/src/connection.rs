@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
+#[cfg(feature = "duckdb-bundled")]
 use tokio::task::JoinHandle;
 
 use mysql_async::prelude::Queryable;
@@ -29,6 +30,7 @@ use crate::path_utils::expand_tilde;
 use crate::plugins::{PluginDriverSession, PluginRegistry, PluginRuntimeEnv};
 use crate::query_cancel::RunningQueries;
 use crate::storage::{normalize_duckdb_worker_max_processes, Storage, DUCKDB_WORKER_MAX_PROCESSES_DEFAULT};
+use crate::task_supervisor::TaskSupervisor;
 
 pub const JDBC_PLUGIN_NOT_INSTALLED: &str =
     "JDBC plugin is not installed. Install the optional JDBC plugin to use this connection.";
@@ -175,7 +177,7 @@ macro_rules! agent_connection_pool_database_type {
 
 pub struct AppState {
     pub connections: Arc<RwLock<HashMap<String, PoolKind>>>,
-    keepalive_tasks: Arc<RwLock<HashMap<String, JoinHandle<()>>>>,
+    task_supervisor: TaskSupervisor,
     pool_activity: Arc<RwLock<HashMap<String, PoolActivity>>>,
     connection_attempts: RwLock<HashMap<String, ConnectionAttemptState>>,
     pub configs: RwLock<HashMap<String, ConnectionConfig>>,
@@ -219,6 +221,7 @@ pub struct PoolActivityTouch {
     pool_key: String,
     connections: Arc<RwLock<HashMap<String, PoolKind>>>,
     pool_activity: Arc<RwLock<HashMap<String, PoolActivity>>>,
+    task_supervisor: TaskSupervisor,
 }
 
 impl Drop for PoolActivityTouch {
@@ -226,10 +229,7 @@ impl Drop for PoolActivityTouch {
         let pool_key = self.pool_key.clone();
         let connections = self.connections.clone();
         let pool_activity = self.pool_activity.clone();
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        handle.spawn(async move {
+        self.task_supervisor.spawn_replace(format!("pool-activity:{pool_key}"), move |_| async move {
             if !connections.read().await.contains_key(&pool_key) {
                 return;
             }
@@ -569,7 +569,7 @@ impl AppState {
     ) -> Self {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
-            keepalive_tasks: Arc::new(RwLock::new(HashMap::new())),
+            task_supervisor: TaskSupervisor::new(),
             pool_activity: Arc::new(RwLock::new(HashMap::new())),
             connection_attempts: RwLock::new(HashMap::new()),
             configs: RwLock::new(HashMap::new()),
@@ -926,13 +926,15 @@ impl AppState {
         let interval = Duration::from_secs(interval_secs.max(1));
         let timeout = Duration::from_secs(config.effective_connect_timeout_secs().max(1));
         let connections = self.connections.clone();
-        let keepalive_tasks = self.keepalive_tasks.clone();
         let pool_activity = self.pool_activity.clone();
         let cancel_contexts = self.postgres_cancel_contexts.clone();
         let running_queries = self.running_queries.clone();
-        let handle = tokio::spawn(async move {
+        self.task_supervisor.spawn_replace(format!("keepalive:{pool_key}"), move |shutdown| async move {
             loop {
-                tokio::time::sleep(interval).await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = tokio::time::sleep(interval) => {}
+                }
 
                 if running_queries.is_pool_active(&key) {
                     continue;
@@ -944,7 +946,6 @@ impl AppState {
                         Ok(Ok(())) => {}
                         Ok(Err(err)) => {
                             log::warn!("Connection keepalive failed for '{key}': {err}; invalidating pool");
-                            keepalive_tasks.write().await.remove(&key);
                             pool_activity.write().await.remove(&key);
                             cancel_contexts.write().await.remove(&key);
                             let removed = connections.write().await.remove(&key);
@@ -958,7 +959,6 @@ impl AppState {
                                 "Connection keepalive timed out for '{key}' after {}s; invalidating pool",
                                 timeout.as_secs()
                             );
-                            keepalive_tasks.write().await.remove(&key);
                             pool_activity.write().await.remove(&key);
                             cancel_contexts.write().await.remove(&key);
                             let removed = connections.write().await.remove(&key);
@@ -971,26 +971,15 @@ impl AppState {
                 }
             }
         });
-        let previous = self.keepalive_tasks.write().await.insert(pool_key.to_string(), handle);
-        if let Some(previous) = previous {
-            previous.abort();
-        }
     }
 
     async fn stop_keepalive_task(&self, pool_key: &str) {
-        let task = self.keepalive_tasks.write().await.remove(pool_key);
-        if let Some(task) = task {
-            task.abort();
-        }
+        self.task_supervisor.stop(&format!("keepalive:{pool_key}"));
     }
 
     async fn stop_keepalive_tasks(&self, pool_keys: &[String]) {
-        let mut tasks = self.keepalive_tasks.write().await;
-        for pool_key in pool_keys {
-            if let Some(task) = tasks.remove(pool_key) {
-                task.abort();
-            }
-        }
+        let keys: Vec<String> = pool_keys.iter().map(|pool_key| format!("keepalive:{pool_key}")).collect();
+        self.task_supervisor.stop_many(keys.iter().map(String::as_str));
     }
 
     pub async fn touch_pool_activity(&self, pool_key: &str) {
@@ -1007,7 +996,18 @@ impl AppState {
             pool_key: pool_key.to_string(),
             connections: self.connections.clone(),
             pool_activity: self.pool_activity.clone(),
+            task_supervisor: self.task_supervisor.clone(),
         }
+    }
+
+    pub async fn shutdown_background_tasks(&self, deadline: Duration) {
+        self.running_queries.cancel_all();
+        self.task_supervisor.shutdown(deadline).await;
+    }
+
+    #[cfg(test)]
+    pub fn supervised_task_count(&self) -> usize {
+        self.task_supervisor.active_count()
     }
 
     pub async fn get_or_create_pool(&self, connection_id: &str, database: Option<&str>) -> Result<String, String> {
@@ -2207,16 +2207,18 @@ impl AppState {
     #[cfg(feature = "duckdb-bundled")]
     pub fn spawn_duckdb_pool_cleanup(&self, pool_key: String, con: DuckDbHandle) {
         let connections = self.connections.clone();
-        let keepalive_tasks = self.keepalive_tasks.clone();
+        let supervisor = self.task_supervisor.clone();
         let pool_activity = self.pool_activity.clone();
         let postgres_cancel_contexts = self.postgres_cancel_contexts.clone();
-        tokio::spawn(async move {
+        let task_key = format!("duckdb-cleanup:{pool_key}");
+        supervisor.clone().spawn_replace(task_key, move |shutdown| async move {
             while Arc::strong_count(&con) > 2 {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
             }
-            if let Some(handle) = keepalive_tasks.write().await.remove(&pool_key) {
-                handle.abort();
-            }
+            supervisor.stop(&format!("keepalive:{pool_key}"));
             pool_activity.write().await.remove(&pool_key);
             postgres_cancel_contexts.write().await.remove(&pool_key);
             let removed = {
@@ -2241,20 +2243,28 @@ impl AppState {
         &self,
         pool_key: String,
         con: DuckDbHandle,
-        task: JoinHandle<Result<db::QueryResult, String>>,
+        mut task: JoinHandle<Result<db::QueryResult, String>>,
     ) {
         let connections = self.connections.clone();
-        let keepalive_tasks = self.keepalive_tasks.clone();
+        let supervisor = self.task_supervisor.clone();
         let pool_activity = self.pool_activity.clone();
         let postgres_cancel_contexts = self.postgres_cancel_contexts.clone();
-        tokio::spawn(async move {
-            let _ = task.await;
+        let task_key = format!("duckdb-draining:{pool_key}");
+        supervisor.clone().spawn_replace(task_key, move |shutdown| async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    task.abort();
+                    return;
+                }
+                _ = &mut task => {}
+            }
             while Arc::strong_count(&con) > 2 {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
             }
-            if let Some(handle) = keepalive_tasks.write().await.remove(&pool_key) {
-                handle.abort();
-            }
+            supervisor.stop(&format!("keepalive:{pool_key}"));
             pool_activity.write().await.remove(&pool_key);
             postgres_cancel_contexts.write().await.remove(&pool_key);
             let removed = {
@@ -3285,26 +3295,6 @@ fn native_postgres_url_config(config: &ConnectionConfig) -> Option<ConnectionCon
             Some(normalized)
         }
         _ => None,
-    }
-}
-
-#[cfg(feature = "duckdb-bundled")]
-fn duckdb_paths_match(left: &str, right: &str) -> bool {
-    let left = expand_tilde(left);
-    let right = expand_tilde(right);
-
-    if db::duckdb_driver::is_memory_database_path(&left) || db::duckdb_driver::is_memory_database_path(&right) {
-        return left.trim().eq_ignore_ascii_case(right.trim());
-    }
-
-    if let (Ok(left_path), Ok(right_path)) = (std::fs::canonicalize(&left), std::fs::canonicalize(&right)) {
-        return left_path == right_path;
-    }
-
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(&right)
-    } else {
-        left == right
     }
 }
 
@@ -4671,7 +4661,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         assert!(state.connections.read().await.contains_key(pool_key));
-        assert!(!state.keepalive_tasks.read().await.contains_key(pool_key));
+        assert_eq!(state.supervised_task_count(), 0);
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -1180,7 +1180,7 @@ test("kept result runs evict inactive payloads without losing switch or archive 
     const tab = store.tabs.find((item) => item.id === tabId);
     assert.ok(tab?.resultRuns?.[0]);
     assert.ok(tab.resultRuns[1]);
-    await waitFor(() => tab.resultRuns?.[0]?.result === undefined && tab.resultRuns?.[0]?.resultCacheState === "disk");
+    await waitFor(() => tab.resultRuns?.[0]?.result === undefined && tab.resultRuns?.[0]?.resultCacheState === "disk", 3_000);
     assert.deepEqual(tab.result?.columns, ["run_2"]);
     assert.deepEqual(tab.resultRuns[1]?.result?.columns, ["run_2"]);
 
@@ -1256,7 +1256,7 @@ test("removing the active result run restores a disk-backed adjacent run", async
     const tab = store.tabs.find((item) => item.id === tabId);
     assert.ok(tab?.resultRuns?.[0]);
     assert.ok(tab.resultRuns[1]);
-    await waitFor(() => tab.resultRuns?.[0]?.result === undefined && tab.resultRuns?.[0]?.resultCacheState === "disk");
+    await waitFor(() => tab.resultRuns?.[0]?.result === undefined && tab.resultRuns?.[0]?.resultCacheState === "disk", 3_000);
 
     assert.equal(await store.removeResultRun(tabId, tab.resultRuns[1].id), true);
 
@@ -2031,7 +2031,7 @@ test("evicting cached tab results releases multi-result payloads and sessions", 
       await store.executeTabSql(tabId, `select ${i + 1}; select ${i + 1} as detail`);
     }
 
-    await waitFor(() => store.tabs.find((tab) => tab.id === tabIds[0])?.resultEvicted === true);
+    await waitFor(() => store.tabs.find((tab) => tab.id === tabIds[0])?.resultEvicted === true, 3_000);
     const evicted = store.tabs.find((tab) => tab.id === tabIds[0]);
     assert.equal(executeCount, 7);
     assert.equal(evicted?.result, undefined);
@@ -2107,7 +2107,7 @@ test("result cache eviction keeps recently accessed inactive tabs", async () => 
     tabIds.push(tabId);
     await store.executeTabSql(tabId, "select 7");
 
-    await waitFor(() => store.tabs.find((tab) => tab.id === tabIds[1])?.resultEvicted === true);
+    await waitFor(() => store.tabs.find((tab) => tab.id === tabIds[1])?.resultEvicted === true, 3_000);
     const recentlyViewed = store.tabs.find((tab) => tab.id === tabIds[0]);
     const leastRecentlyUsed = store.tabs.find((tab) => tab.id === tabIds[1]);
     assert.ok(recentlyViewed?.result);
