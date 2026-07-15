@@ -111,18 +111,26 @@ describe("PG_STATUS_LEGACY_SQL", () => {
 });
 
 describe("isPgStatusCompatibilityError", () => {
-  it("detects the undefined-function SQLSTATE", () => {
-    expect(isPgStatusCompatibilityError({ code: "42883" })).toBe(true);
-  });
-
   it("detects the WAL-function-not-found message on servers without a code field", () => {
     expect(isPgStatusCompatibilityError(new Error("function pg_current_wal_lsn() does not exist"))).toBe(true);
     expect(isPgStatusCompatibilityError(new Error("function pg_wal_lsn_diff(pg_lsn, unknown) does not exist"))).toBe(true);
   });
 
+  it("detects the WAL-function-not-found SQLSTATE combined with a matching message", () => {
+    expect(isPgStatusCompatibilityError(Object.assign(new Error("function pg_current_wal_lsn() does not exist"), { code: "42883" }))).toBe(true);
+  });
+
   it("does not misclassify unrelated errors", () => {
     expect(isPgStatusCompatibilityError(new Error("connection refused"))).toBe(false);
     expect(isPgStatusCompatibilityError({ code: "42703" })).toBe(false);
+  });
+
+  it("does not treat every SQLSTATE 42883 as the WAL compatibility issue — only the two specific functions", () => {
+    // Bare code with no message can't confirm which function is missing.
+    expect(isPgStatusCompatibilityError({ code: "42883" })).toBe(false);
+    // A different undefined function under the same SQLSTATE must not trigger the WAL fallback.
+    expect(isPgStatusCompatibilityError(Object.assign(new Error("function pg_postmaster_start_time() does not exist"), { code: "42883" }))).toBe(false);
+    expect(isPgStatusCompatibilityError(new Error("function some_other_fn() does not exist"))).toBe(false);
   });
 });
 

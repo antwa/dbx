@@ -24,24 +24,44 @@ export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime
  * Deliberately excludes `pg_stat_bgwriter`/checkpoint counters: those columns
  * moved to `pg_stat_checkpointer` in PG17, and a version-fragile query would
  * break the dashboard on newer servers for a nice-to-have metric.
+ *
+ * Scans `pg_stat_database` and `pg_stat_activity` exactly once each (one CTE
+ * per view, `FILTER` for the conditional counts) rather than once per column —
+ * this runs every ~1-10s while the dashboard is open, so re-scanning either
+ * view per column would be needless repeated load on the server.
+ *
+ * The `pg_stat_activity` CTE excludes `pg_backend_pid()` — this query's own
+ * backend is always `active` while it runs, so without the exclusion an
+ * otherwise idle server would always show at least one active connection.
  */
-export const PG_STATUS_SQL = `SELECT
-  (SELECT coalesce(sum(xact_commit),0) FROM pg_stat_database) AS xact_commit,
-  (SELECT coalesce(sum(xact_rollback),0) FROM pg_stat_database) AS xact_rollback,
-  (SELECT coalesce(sum(blks_hit),0) FROM pg_stat_database) AS blks_hit,
-  (SELECT coalesce(sum(blks_read),0) FROM pg_stat_database) AS blks_read,
-  (SELECT coalesce(sum(tup_returned),0) FROM pg_stat_database) AS tup_returned,
-  (SELECT coalesce(sum(tup_fetched),0) FROM pg_stat_database) AS tup_fetched,
-  (SELECT coalesce(sum(tup_inserted),0) FROM pg_stat_database) AS tup_inserted,
-  (SELECT coalesce(sum(tup_updated),0) FROM pg_stat_database) AS tup_updated,
-  (SELECT coalesce(sum(tup_deleted),0) FROM pg_stat_database) AS tup_deleted,
-  (SELECT coalesce(sum(deadlocks),0) FROM pg_stat_database) AS deadlocks,
-  (SELECT coalesce(sum(temp_files),0) FROM pg_stat_database) AS temp_files,
-  (SELECT count(*) FROM pg_stat_activity) AS connections,
-  (SELECT count(*) FROM pg_stat_activity WHERE state = 'active') AS active_connections,
-  (SELECT count(*) FROM pg_stat_activity WHERE state = 'idle') AS idle_connections,
+export const PG_STATUS_SQL = `WITH db_stats AS (
+  SELECT
+    coalesce(sum(xact_commit),0) AS xact_commit,
+    coalesce(sum(xact_rollback),0) AS xact_rollback,
+    coalesce(sum(blks_hit),0) AS blks_hit,
+    coalesce(sum(blks_read),0) AS blks_read,
+    coalesce(sum(tup_returned),0) AS tup_returned,
+    coalesce(sum(tup_fetched),0) AS tup_fetched,
+    coalesce(sum(tup_inserted),0) AS tup_inserted,
+    coalesce(sum(tup_updated),0) AS tup_updated,
+    coalesce(sum(tup_deleted),0) AS tup_deleted,
+    coalesce(sum(deadlocks),0) AS deadlocks,
+    coalesce(sum(temp_files),0) AS temp_files
+  FROM pg_stat_database
+), activity_stats AS (
+  SELECT
+    count(*) AS connections,
+    count(*) FILTER (WHERE state = 'active') AS active_connections,
+    count(*) FILTER (WHERE state = 'idle') AS idle_connections
+  FROM pg_stat_activity
+  WHERE pid <> pg_backend_pid()
+)
+SELECT
+  db_stats.*,
+  activity_stats.*,
   pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0') AS wal_bytes,
-  floor(extract(epoch FROM (now() - pg_postmaster_start_time())))::bigint AS uptime_seconds`;
+  floor(extract(epoch FROM (now() - pg_postmaster_start_time())))::bigint AS uptime_seconds
+FROM db_stats, activity_stats`;
 
 /**
  * Pre-10 fallback: PostgreSQL 10 renamed the WAL location functions
@@ -64,9 +84,14 @@ const SERVER_DASHBOARD_DB_TYPES = new Set<DatabaseType>(["postgres"]);
 /** Detect the undefined-function failure produced by pre-10 servers lacking `pg_current_wal_lsn`/`pg_wal_lsn_diff`. */
 export function isPgStatusCompatibilityError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
-  if (code === "42883") return true;
+  // SQLSTATE 42883 (undefined_function) is not specific to the WAL functions —
+  // any missing function in PG_STATUS_SQL would raise it. Only treat this as
+  // the pre-PG10 WAL rename by also requiring the message to name one of the
+  // two specific functions; otherwise it's a different, unrelated failure and
+  // retrying with the legacy WAL query wouldn't fix it.
+  if (code !== "" && code !== "42883") return false;
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:pg_current_wal_lsn|pg_wal_lsn_diff).*(?:does not exist|42883)|(?:does not exist|42883).*(?:pg_current_wal_lsn|pg_wal_lsn_diff)/i.test(message);
+  return /(?:pg_current_wal_lsn|pg_wal_lsn_diff)/i.test(message) && /does not exist/i.test(message);
 }
 
 /** Parse the single-row `PG_STATUS_SQL` / `PG_VARIABLES_SQL` result into a name/value map. */
