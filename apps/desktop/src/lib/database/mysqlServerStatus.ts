@@ -1,6 +1,6 @@
 import type { ConnectionConfig, DatabaseType, QueryResult } from "@/types/database";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
-import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample } from "@/lib/database/serverMetrics";
+import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatRate, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample } from "@/lib/database/serverMetrics";
 
 /**
  * MySQL server-monitoring helpers. Pure and framework-free so the rate math and
@@ -14,7 +14,7 @@ import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime
  * Sample/rate math and formatting are engine-agnostic and live in
  * `./serverMetrics`; re-exported here so existing callers keep one import path.
  */
-export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample };
+export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatRate, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample };
 
 export const GLOBAL_STATUS_SQL = "SHOW GLOBAL STATUS";
 export const GLOBAL_VARIABLES_SQL = "SHOW GLOBAL VARIABLES";
@@ -67,13 +67,6 @@ export function innodbBufferHitRatio(status: StatusMap): number | null {
   const ratio = (1 - reads / requests) * 100;
   if (!Number.isFinite(ratio)) return null;
   return Math.max(0, Math.min(100, ratio));
-}
-
-const RATE_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
-
-/** Cumulative-counter rates can be below 1/s, so preserve their fractional value. */
-export function formatRate(value: number): string {
-  return Number.isFinite(value) ? RATE_NUMBER_FORMATTER.format(value) : "0";
 }
 
 /** Whether the given database type exposes the server dashboard (MySQL family). */

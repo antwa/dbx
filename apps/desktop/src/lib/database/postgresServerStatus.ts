@@ -1,6 +1,6 @@
 import type { ConnectionConfig, DatabaseType, QueryResult } from "@/types/database";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
-import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample } from "@/lib/database/serverMetrics";
+import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatRate, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample } from "@/lib/database/serverMetrics";
 
 /**
  * PostgreSQL server-monitoring helpers. Pure and framework-free so the rate math
@@ -17,7 +17,7 @@ import { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime
  * / WAL position (`PG_STATUS_SQL`) and a one-shot settings query
  * (`PG_VARIABLES_SQL`), both run through the generic query bridge.
  */
-export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample };
+export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatRate, formatUptime, statusEntries, statusNumber, type StatusEntry, type StatusMap, type StatusSample };
 
 /**
  * Single round-trip aggregate, mirroring `SHOW GLOBAL STATUS` being one call.
@@ -26,13 +26,21 @@ export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatUptime
  * break the dashboard on newer servers for a nice-to-have metric.
  *
  * Scans `pg_stat_database` and `pg_stat_activity` exactly once each (one CTE
- * per view, `FILTER` for the conditional counts) rather than once per column —
- * this runs every ~1-10s while the dashboard is open, so re-scanning either
- * view per column would be needless repeated load on the server.
+ * per view) rather than once per column — this runs every ~1-10s while the
+ * dashboard is open, so re-scanning either view per column would be needless
+ * repeated load on the server. Uses `SUM(CASE WHEN ...)` rather than the
+ * `FILTER` clause for the conditional counts: `FILTER` is SQL:2003/PG9.4+,
+ * and this dashboard is meant to work back to PG 9.2.
  *
  * The `pg_stat_activity` CTE excludes `pg_backend_pid()` — this query's own
  * backend is always `active` while it runs, so without the exclusion an
  * otherwise idle server would always show at least one active connection.
+ *
+ * The WAL metric is recovery-aware: `pg_current_wal_lsn()` errors on a hot
+ * standby ("recovery is in progress"), which would fail this entire combined
+ * query on a read replica. `pg_is_in_recovery()` picks `pg_last_wal_replay_lsn()`
+ * instead in that case — Postgres only evaluates the taken `CASE` branch, so
+ * `pg_current_wal_lsn()` is never actually called while in recovery.
  */
 export const PG_STATUS_SQL = `WITH db_stats AS (
   SELECT
@@ -51,27 +59,34 @@ export const PG_STATUS_SQL = `WITH db_stats AS (
 ), activity_stats AS (
   SELECT
     count(*) AS connections,
-    count(*) FILTER (WHERE state = 'active') AS active_connections,
-    count(*) FILTER (WHERE state = 'idle') AS idle_connections
+    coalesce(sum(CASE WHEN state = 'active' THEN 1 ELSE 0 END),0) AS active_connections,
+    coalesce(sum(CASE WHEN state = 'idle' THEN 1 ELSE 0 END),0) AS idle_connections
   FROM pg_stat_activity
   WHERE pid <> pg_backend_pid()
 )
 SELECT
   db_stats.*,
   activity_stats.*,
-  pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0') AS wal_bytes,
+  coalesce(CASE WHEN pg_is_in_recovery()
+    THEN pg_wal_lsn_diff(pg_last_wal_replay_lsn(), '0/0')
+    ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')
+  END, 0) AS wal_bytes,
   floor(extract(epoch FROM (now() - pg_postmaster_start_time())))::bigint AS uptime_seconds
 FROM db_stats, activity_stats`;
 
 /**
  * Pre-10 fallback: PostgreSQL 10 renamed the WAL location functions
  * (`pg_current_xlog_location()` → `pg_current_wal_lsn()`,
+ * `pg_last_xlog_replay_location()` → `pg_last_wal_replay_lsn()`,
  * `pg_xlog_location_diff()` → `pg_wal_lsn_diff()`). Every other column here
  * (pg_stat_database's transaction, block, tuple, deadlock and temp-file
- * counters, pg_stat_activity, pg_postmaster_start_time()) has been present
- * since 9.2, so this is the only piece that needs a version-gated fallback.
+ * counters, pg_stat_activity, pg_is_in_recovery(), pg_postmaster_start_time())
+ * has been present since 9.2, so this is the only piece that needs a
+ * version-gated fallback.
  */
-export const PG_STATUS_LEGACY_SQL = PG_STATUS_SQL.replace("pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')", "pg_xlog_location_diff(pg_current_xlog_location(), '0/0')");
+export const PG_STATUS_LEGACY_SQL = PG_STATUS_SQL.replace(/\bpg_current_wal_lsn\b/g, "pg_current_xlog_location")
+  .replace(/\bpg_last_wal_replay_lsn\b/g, "pg_last_xlog_replay_location")
+  .replace(/\bpg_wal_lsn_diff\b/g, "pg_xlog_location_diff");
 
 export const PG_VARIABLES_SQL = "SELECT current_setting('max_connections') AS max_connections, current_setting('server_version') AS version";
 
@@ -81,17 +96,17 @@ export const MAX_SAMPLES = 60;
 /** Engines exposing `pg_stat_database`/`pg_stat_activity` in the shape this dashboard expects. */
 const SERVER_DASHBOARD_DB_TYPES = new Set<DatabaseType>(["postgres"]);
 
-/** Detect the undefined-function failure produced by pre-10 servers lacking `pg_current_wal_lsn`/`pg_wal_lsn_diff`. */
+/** Detect the undefined-function failure produced by pre-10 servers lacking `pg_current_wal_lsn`/`pg_last_wal_replay_lsn`/`pg_wal_lsn_diff`. */
 export function isPgStatusCompatibilityError(error: unknown): boolean {
   const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
   // SQLSTATE 42883 (undefined_function) is not specific to the WAL functions —
   // any missing function in PG_STATUS_SQL would raise it. Only treat this as
   // the pre-PG10 WAL rename by also requiring the message to name one of the
-  // two specific functions; otherwise it's a different, unrelated failure and
+  // three renamed functions; otherwise it's a different, unrelated failure and
   // retrying with the legacy WAL query wouldn't fix it.
   if (code !== "" && code !== "42883") return false;
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:pg_current_wal_lsn|pg_wal_lsn_diff)/i.test(message) && /does not exist/i.test(message);
+  return /(?:pg_current_wal_lsn|pg_last_wal_replay_lsn|pg_wal_lsn_diff)/i.test(message) && /does not exist/i.test(message);
 }
 
 /** Parse the single-row `PG_STATUS_SQL` / `PG_VARIABLES_SQL` result into a name/value map. */

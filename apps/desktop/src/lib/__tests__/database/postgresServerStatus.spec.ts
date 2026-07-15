@@ -100,19 +100,40 @@ describe("formatters", () => {
   });
 });
 
+describe("PG_STATUS_SQL", () => {
+  it("does not use FILTER (PG9.4+ only) — this dashboard targets PG9.2+", () => {
+    expect(PG_STATUS_SQL).not.toContain("FILTER");
+    expect(PG_STATUS_SQL).toContain("sum(CASE WHEN state = 'active' THEN 1 ELSE 0 END)");
+    expect(PG_STATUS_SQL).toContain("sum(CASE WHEN state = 'idle' THEN 1 ELSE 0 END)");
+  });
+
+  it("is recovery-aware for the WAL metric, never calling pg_current_wal_lsn() unconditionally", () => {
+    expect(PG_STATUS_SQL).toContain("CASE WHEN pg_is_in_recovery()");
+    expect(PG_STATUS_SQL).toContain("pg_last_wal_replay_lsn()");
+    expect(PG_STATUS_SQL).toContain("pg_current_wal_lsn()");
+  });
+});
+
 describe("PG_STATUS_LEGACY_SQL", () => {
   it("swaps only the PG10+ WAL functions for their pre-10 equivalents", () => {
     expect(PG_STATUS_LEGACY_SQL).not.toContain("pg_current_wal_lsn");
+    expect(PG_STATUS_LEGACY_SQL).not.toContain("pg_last_wal_replay_lsn");
     expect(PG_STATUS_LEGACY_SQL).not.toContain("pg_wal_lsn_diff");
-    expect(PG_STATUS_LEGACY_SQL).toContain("pg_xlog_location_diff(pg_current_xlog_location(), '0/0')");
+    expect(PG_STATUS_LEGACY_SQL).toContain("pg_current_xlog_location");
+    expect(PG_STATUS_LEGACY_SQL).toContain("pg_last_xlog_replay_location");
+    expect(PG_STATUS_LEGACY_SQL).toContain("pg_xlog_location_diff");
     // Everything else stays byte-for-byte identical to the primary query.
-    expect(PG_STATUS_LEGACY_SQL.replace("pg_xlog_location_diff(pg_current_xlog_location(), '0/0')", "pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')")).toBe(PG_STATUS_SQL);
+    const revertedToPrimary = PG_STATUS_LEGACY_SQL.replace(/\bpg_current_xlog_location\b/g, "pg_current_wal_lsn")
+      .replace(/\bpg_last_xlog_replay_location\b/g, "pg_last_wal_replay_lsn")
+      .replace(/\bpg_xlog_location_diff\b/g, "pg_wal_lsn_diff");
+    expect(revertedToPrimary).toBe(PG_STATUS_SQL);
   });
 });
 
 describe("isPgStatusCompatibilityError", () => {
   it("detects the WAL-function-not-found message on servers without a code field", () => {
     expect(isPgStatusCompatibilityError(new Error("function pg_current_wal_lsn() does not exist"))).toBe(true);
+    expect(isPgStatusCompatibilityError(new Error("function pg_last_wal_replay_lsn() does not exist"))).toBe(true);
     expect(isPgStatusCompatibilityError(new Error("function pg_wal_lsn_diff(pg_lsn, unknown) does not exist"))).toBe(true);
   });
 

@@ -9,7 +9,23 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import MetricCard from "@/components/common/MetricCard.vue";
 import MetricLineChart from "@/components/chart/MetricLineChart.vue";
 import * as api from "@/lib/backend/api";
-import { computePgTps, computeRate, formatBytesPerSec, formatNumber, formatUptime, isPgStatusCompatibilityError, MAX_SAMPLES, parsePgStatusRow, pgCacheHitRatio, PG_STATUS_LEGACY_SQL, PG_STATUS_SQL, PG_VARIABLES_SQL, statusNumber, type StatusSample } from "@/lib/database/postgresServerStatus";
+import {
+  computePgTps,
+  computeRate,
+  formatBytesPerSec,
+  formatNumber,
+  formatRate,
+  formatUptime,
+  isPgStatusCompatibilityError,
+  MAX_SAMPLES,
+  parsePgStatusRow,
+  pgCacheHitRatio,
+  PG_STATUS_LEGACY_SQL,
+  PG_STATUS_SQL,
+  PG_VARIABLES_SQL,
+  statusNumber,
+  type StatusSample,
+} from "@/lib/database/postgresServerStatus";
 import { useVerticalOverlayScrollbar } from "@/composables/useVerticalOverlayScrollbar";
 
 const props = defineProps<{
@@ -226,7 +242,7 @@ onUnmounted(stopAutoRefresh);
       <div ref="scrollerRef" class="pg-dashboard-scroller h-full min-h-0 overflow-y-auto" @scroll.passive="onScrollerScroll">
         <div ref="scrollerContentRef" class="flex flex-col gap-3 p-3">
           <div class="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-4">
-            <MetricCard :label="t('serverDashboard.tps')" :value="formatNumber(tps)" :icon="Gauge" />
+            <MetricCard :label="t('serverDashboard.tps')" :value="formatRate(tps)" :icon="Gauge" />
             <MetricCard :label="t('serverDashboard.connections')" :value="`${formatNumber(totalConnections)}${maxConnections ? ' / ' + formatNumber(maxConnections) : ''}`" :icon="Users" />
             <MetricCard :label="t('serverDashboard.activeQueries')" :value="formatNumber(activeConnections)" :icon="Activity" />
             <MetricCard :label="t('serverDashboard.cacheHit')" :value="cacheHit === null ? '—' : cacheHit.toFixed(2) + '%'" :icon="Database" />
@@ -238,10 +254,10 @@ onUnmounted(stopAutoRefresh);
 
           <div class="grid shrink-0 grid-cols-1 gap-3 xl:grid-cols-2">
             <MetricLineChart :title="t('serverDashboard.serverSessionsChart')" :labels="chartLabels" :series="sessionsSeries" :value-formatter="formatNumber" />
-            <MetricLineChart :title="t('serverDashboard.blockIoChart')" :labels="chartLabels" :series="blockIoSeries" :value-formatter="formatNumber" />
-            <MetricLineChart :title="t('serverDashboard.tuplesInChart')" :labels="chartLabels" :series="tuplesInSeries" :value-formatter="formatNumber" />
-            <MetricLineChart :title="t('serverDashboard.tuplesOutChart')" :labels="chartLabels" :series="tuplesOutSeries" :value-formatter="formatNumber" />
-            <MetricLineChart class="xl:col-span-2" :title="t('serverDashboard.transactionsChart')" :labels="chartLabels" :series="transactionsSeries" :value-formatter="formatNumber" />
+            <MetricLineChart :title="t('serverDashboard.blockIoChart')" :labels="chartLabels" :series="blockIoSeries" :value-formatter="formatRate" />
+            <MetricLineChart :title="t('serverDashboard.tuplesInChart')" :labels="chartLabels" :series="tuplesInSeries" :value-formatter="formatRate" />
+            <MetricLineChart :title="t('serverDashboard.tuplesOutChart')" :labels="chartLabels" :series="tuplesOutSeries" :value-formatter="formatRate" />
+            <MetricLineChart class="xl:col-span-2" :title="t('serverDashboard.transactionsChart')" :labels="chartLabels" :series="transactionsSeries" :value-formatter="formatRate" />
           </div>
         </div>
       </div>
