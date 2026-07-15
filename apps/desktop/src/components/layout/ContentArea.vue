@@ -56,6 +56,7 @@ const TableStructureEditor = defineAsyncComponent(() => import("@/components/str
 const DatabaseUserAdmin = defineAsyncComponent(() => import("@/components/admin/DatabaseUserAdmin.vue"));
 const ProcessListPanel = defineAsyncComponent(() => import("@/components/admin/ProcessListPanel.vue"));
 const MySqlDashboard = defineAsyncComponent(() => import("@/components/admin/MySqlDashboard.vue"));
+const PostgresDashboard = defineAsyncComponent(() => import("@/components/admin/PostgresDashboard.vue"));
 const DamengJobAdmin = defineAsyncComponent(() => import("@/components/admin/DamengJobAdmin.vue"));
 const ExplainPlanViewer = defineAsyncComponent(() => import("@/components/explain/ExplainPlanViewer.vue"));
 const QueryChart = defineAsyncComponent(() => import("@/components/chart/QueryChart.vue"));
@@ -1602,6 +1603,12 @@ defineExpose({ focusSearch, refreshData, handleModRTarget, requestQueryEditorExe
     <template v-else-if="activeTab.mode === 'mysql-dashboard'">
       <div class="min-h-0 flex-1">
         <MySqlDashboard :key="activeTab.id" :connection-id="activeTab.connectionId" />
+      </div>
+    </template>
+
+    <template v-else-if="activeTab.mode === 'postgres-dashboard'">
+      <div class="min-h-0 flex-1">
+        <PostgresDashboard :key="activeTab.id" :connection-id="activeTab.connectionId" />
       </div>
     </template>
 

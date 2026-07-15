@@ -1,0 +1,144 @@
+import { describe, expect, it } from "vitest";
+import type { QueryResult } from "@/types/database";
+import {
+  computePgTps,
+  computeRate,
+  connectionSupportsServerDashboard,
+  formatBytes,
+  formatBytesPerSec,
+  formatUptime,
+  isPgStatusCompatibilityError,
+  parsePgStatusRow,
+  pgCacheHitRatio,
+  PG_STATUS_LEGACY_SQL,
+  PG_STATUS_SQL,
+  statusNumber,
+  supportsServerDashboard,
+  type StatusSample,
+} from "@/lib/database/postgresServerStatus";
+
+function statusResult(columns: string[], row: (string | number)[]): QueryResult {
+  return { columns, rows: [row], affected_rows: 0, execution_time_ms: 0 };
+}
+
+function sample(at: number, status: Record<string, string>): StatusSample {
+  return { at, status };
+}
+
+describe("parsePgStatusRow", () => {
+  it("parses the single aggregate row into a map", () => {
+    const map = parsePgStatusRow(statusResult(["xact_commit", "xact_rollback"], ["1200", "3"]));
+    expect(map).toEqual({ xact_commit: "1200", xact_rollback: "3" });
+  });
+
+  it("returns empty map for malformed input", () => {
+    expect(parsePgStatusRow(null)).toEqual({});
+    expect(parsePgStatusRow({ columns: [], rows: [], affected_rows: 0, execution_time_ms: 0 })).toEqual({});
+  });
+});
+
+describe("statusNumber", () => {
+  it("reads numeric values and defaults to 0", () => {
+    expect(statusNumber({ connections: "12" }, "connections")).toBe(12);
+    expect(statusNumber({}, "missing")).toBe(0);
+    expect(statusNumber({ x: "abc" }, "x")).toBe(0);
+  });
+});
+
+describe("computeRate", () => {
+  it("computes per-second delta", () => {
+    const prev = sample(1000, { tup_inserted: "1000" });
+    const curr = sample(3000, { tup_inserted: "5000" });
+    expect(computeRate(prev, curr, "tup_inserted")).toBe(2000); // 4000 rows / 2s
+  });
+
+  it("returns 0 on counter reset (decrease)", () => {
+    const prev = sample(1000, { xact_commit: "9000" });
+    const curr = sample(2000, { xact_commit: "10" });
+    expect(computeRate(prev, curr, "xact_commit")).toBe(0);
+  });
+
+  it("returns 0 for non-positive time delta", () => {
+    const prev = sample(2000, { xact_commit: "10" });
+    const curr = sample(2000, { xact_commit: "20" });
+    expect(computeRate(prev, curr, "xact_commit")).toBe(0);
+  });
+});
+
+describe("computePgTps", () => {
+  it("sums commit and rollback rates", () => {
+    const prev = sample(0, { xact_commit: "0", xact_rollback: "0" });
+    const curr = sample(1000, { xact_commit: "90", xact_rollback: "10" });
+    expect(computePgTps(prev, curr)).toBe(100);
+  });
+});
+
+describe("pgCacheHitRatio", () => {
+  it("computes hit ratio as a percentage", () => {
+    expect(pgCacheHitRatio({ blks_hit: "997", blks_read: "3" })).toBeCloseTo(99.7, 1);
+  });
+
+  it("returns null when no data has accumulated", () => {
+    expect(pgCacheHitRatio({})).toBeNull();
+    expect(pgCacheHitRatio({ blks_hit: "0", blks_read: "0" })).toBeNull();
+  });
+});
+
+describe("formatters", () => {
+  it("formats bytes and bytes/sec", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(1024)).toBe("1.0 KB");
+    expect(formatBytes(1024 * 1024 * 2)).toBe("2.0 MB");
+    expect(formatBytesPerSec(1024)).toBe("1.0 KB/s");
+  });
+
+  it("formats uptime compactly", () => {
+    expect(formatUptime(0)).toBe("0s");
+    expect(formatUptime(45)).toBe("45s");
+    expect(formatUptime(3661)).toBe("1h 1m");
+    expect(formatUptime(90061)).toBe("1d 1h 1m");
+  });
+});
+
+describe("PG_STATUS_LEGACY_SQL", () => {
+  it("swaps only the PG10+ WAL functions for their pre-10 equivalents", () => {
+    expect(PG_STATUS_LEGACY_SQL).not.toContain("pg_current_wal_lsn");
+    expect(PG_STATUS_LEGACY_SQL).not.toContain("pg_wal_lsn_diff");
+    expect(PG_STATUS_LEGACY_SQL).toContain("pg_xlog_location_diff(pg_current_xlog_location(), '0/0')");
+    // Everything else stays byte-for-byte identical to the primary query.
+    expect(PG_STATUS_LEGACY_SQL.replace("pg_xlog_location_diff(pg_current_xlog_location(), '0/0')", "pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')")).toBe(PG_STATUS_SQL);
+  });
+});
+
+describe("isPgStatusCompatibilityError", () => {
+  it("detects the undefined-function SQLSTATE", () => {
+    expect(isPgStatusCompatibilityError({ code: "42883" })).toBe(true);
+  });
+
+  it("detects the WAL-function-not-found message on servers without a code field", () => {
+    expect(isPgStatusCompatibilityError(new Error("function pg_current_wal_lsn() does not exist"))).toBe(true);
+    expect(isPgStatusCompatibilityError(new Error("function pg_wal_lsn_diff(pg_lsn, unknown) does not exist"))).toBe(true);
+  });
+
+  it("does not misclassify unrelated errors", () => {
+    expect(isPgStatusCompatibilityError(new Error("connection refused"))).toBe(false);
+    expect(isPgStatusCompatibilityError({ code: "42703" })).toBe(false);
+  });
+});
+
+describe("supportsServerDashboard", () => {
+  it("is true for postgres only", () => {
+    expect(supportsServerDashboard("postgres")).toBe(true);
+    expect(supportsServerDashboard("mysql")).toBe(false);
+    expect(supportsServerDashboard("opengauss")).toBe(false);
+    expect(supportsServerDashboard("kingbase")).toBe(false);
+    expect(supportsServerDashboard(undefined)).toBe(false);
+  });
+
+  it("gates on the connection's effective db type", () => {
+    expect(connectionSupportsServerDashboard({ id: "pg", name: "Postgres", db_type: "postgres" } as any)).toBe(true);
+    expect(connectionSupportsServerDashboard({ id: "jdbc-pg", name: "JDBC Postgres", db_type: "jdbc", connection_string: "jdbc:postgresql://localhost/db" } as any)).toBe(true);
+    expect(connectionSupportsServerDashboard({ id: "mysql", name: "MySQL", db_type: "mysql" } as any)).toBe(false);
+    expect(connectionSupportsServerDashboard(undefined)).toBe(false);
+  });
+});

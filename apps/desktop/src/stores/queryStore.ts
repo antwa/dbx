@@ -1080,6 +1080,31 @@ export const useQueryStore = defineStore("query", () => {
     return id;
   }
 
+  function openPostgresDashboard(connectionId: string) {
+    const existing = tabs.value.find((tab) => tab.mode === "postgres-dashboard" && tab.connectionId === connectionId);
+    if (existing) {
+      switchTab(existing.id);
+      return existing.id;
+    }
+
+    const conn = useConnectionStore().getConfig(connectionId);
+    const id = uuid();
+    const tab: QueryTab = {
+      id,
+      title: conn?.name ? `${conn.name} - ${t("serverDashboard.title")}` : t("serverDashboard.title"),
+      connectionId,
+      database: conn?.database || "",
+      sql: "",
+      isExecuting: false,
+      isCancelling: false,
+      isExplaining: false,
+      mode: "postgres-dashboard",
+    };
+    tabs.value.push(tab);
+    activeTabId.value = id;
+    return id;
+  }
+
   function openDamengJobAdmin(connectionId: string) {
     const existing = tabs.value.find((tab) => tab.mode === "dameng-jobs" && tab.connectionId === connectionId);
     if (existing) {
@@ -3962,6 +3987,7 @@ export const useQueryStore = defineStore("query", () => {
     openUserAdmin,
     openProcessList,
     openMysqlDashboard,
+    openPostgresDashboard,
     openDamengJobAdmin,
     openMqAdmin,
     openNacosAdmin,
