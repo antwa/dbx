@@ -80,7 +80,7 @@ import {
   type SnippetSyncConfig,
   type WebDavConfig,
 } from "@/lib/backend/api";
-import { eventToShortcut } from "@/lib/editor/keyboardShortcuts";
+import { eventToModifierOnlyShortcut, eventToShortcut } from "@/lib/editor/keyboardShortcuts";
 import { SHORTCUT_DEFINITIONS, findShortcutConflict, normalizeShortcutSettings, type ShortcutActionId } from "@/lib/editor/shortcutRegistry";
 import { formatShortcutDisplay } from "@/lib/editor/shortcutDisplay";
 import { normalizeSidebarHiddenTablePrefixes } from "@/lib/sidebar/sidebarTableNameDisplay";
@@ -348,7 +348,7 @@ const editToolbarItems = ref({ ...settingsStore.editorSettings.toolbarItems });
 const systemFonts = ref<string[]>([]);
 const systemFontsLoading = ref(false);
 const systemFontsLoaded = ref(false);
-const uiScaleOptions = [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const uiScaleOptions = [0.75, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2];
 const fontSearchTriggerClass =
   "h-8 w-full max-w-none justify-between gap-1.5 rounded-[6px] border border-input bg-transparent py-2 pl-2.5 pr-2 text-sm font-normal shadow-none hover:bg-transparent focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-expanded:bg-transparent dark:bg-input/30 dark:hover:bg-input/50";
 const appearanceFontSearchTriggerClass = `${fontSearchTriggerClass} gap-0 pl-2 pr-1.5`;
@@ -1202,7 +1202,8 @@ function onShortcutKeydown(actionId: ShortcutActionId, event: KeyboardEvent) {
     editingShortcutId.value = null;
     return;
   }
-  const shortcut = eventToShortcut(event);
+  const definition = SHORTCUT_DEFINITIONS.find((item) => item.id === actionId);
+  const shortcut = definition?.inputKind === "modifier-only" ? eventToModifierOnlyShortcut(event) : eventToShortcut(event);
   if (!shortcut) return;
   onShortcutChange(actionId, shortcut);
   editingShortcutId.value = null;

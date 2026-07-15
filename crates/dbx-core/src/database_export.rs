@@ -697,9 +697,10 @@ pub fn build_export_insert_statements(options: BuildExportInsertStatementsOption
 }
 
 pub(crate) fn is_internal_export_column(database_type: Option<DatabaseType>, column: &str) -> bool {
-    // Oracle ROWID is injected only to identify editable rows. It is not a
-    // physical table column and must never propagate into exported SQL.
-    database_type == Some(DatabaseType::Oracle) && column.eq_ignore_ascii_case(crate::sql_dialect::DBX_ROWID_COLUMN)
+    // Oracle-compatible ROWID is injected only to identify editable rows. It
+    // is not a physical table column and must never propagate into exports.
+    crate::sql_dialect::uses_oracle_row_id(database_type)
+        && column.eq_ignore_ascii_case(crate::sql_dialect::DBX_ROWID_COLUMN)
 }
 
 fn is_postgres_tsvector_export_column(database_type: Option<DatabaseType>, column_type: Option<&str>) -> bool {
@@ -1751,6 +1752,24 @@ mod tests {
             column_types: vec![Some("VARCHAR2".to_string()), Some("NUMBER".to_string()), Some("VARCHAR2".to_string())],
             column_extras: Vec::new(),
             rows: vec![vec![json!("AAAPr9AAEAAAAGfAAA"), json!(1), json!("Ada")]],
+            batch_size: Some(100),
+        })
+        .unwrap();
+
+        assert_eq!(statements, vec!["INSERT INTO \"APP\".\"USERS\" (\"ID\", \"NAME\") VALUES (1, 'Ada');"]);
+    }
+
+    #[test]
+    fn oceanbase_oracle_export_omits_synthetic_rowid_from_insert_columns() {
+        let statements = build_export_insert_statements(BuildExportInsertStatementsOptions {
+            database_type: Some(DatabaseType::OceanbaseOracle),
+            schema: Some("APP".to_string()),
+            table_name: Some("USERS".to_string()),
+            qualified_table_name: None,
+            columns: vec!["__DBX_ROWID".to_string(), "ID".to_string(), "NAME".to_string()],
+            column_types: vec![Some("VARCHAR2".to_string()), Some("NUMBER".to_string()), Some("VARCHAR2".to_string())],
+            column_extras: Vec::new(),
+            rows: vec![vec![json!("*AAABk1AAEAAAAAgAAA"), json!(1), json!("Ada")]],
             batch_size: Some(100),
         })
         .unwrap();

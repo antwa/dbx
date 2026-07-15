@@ -69,6 +69,13 @@ export function innodbBufferHitRatio(status: StatusMap): number | null {
   return Math.max(0, Math.min(100, ratio));
 }
 
+const RATE_NUMBER_FORMATTER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
+
+/** Cumulative-counter rates can be below 1/s, so preserve their fractional value. */
+export function formatRate(value: number): string {
+  return Number.isFinite(value) ? RATE_NUMBER_FORMATTER.format(value) : "0";
+}
+
 /** Whether the given database type exposes the server dashboard (MySQL family). */
 export function supportsServerDashboard(dbType: DatabaseType | undefined): boolean {
   return !!dbType && SERVER_DASHBOARD_DB_TYPES.has(dbType);
