@@ -35,6 +35,8 @@ export { computeRate, formatBytes, formatBytesPerSec, formatNumber, formatRate, 
  * The `pg_stat_activity` CTE excludes `pg_backend_pid()` — this query's own
  * backend is always `active` while it runs, so without the exclusion an
  * otherwise idle server would always show at least one active connection.
+ * Rows whose `state` is NULL are excluded from the total because PostgreSQL
+ * masks activity columns for sessions the current role cannot inspect.
  *
  * The WAL metric is recovery-aware: `pg_current_wal_lsn()` errors on a hot
  * standby ("recovery is in progress"), which would fail this entire combined
@@ -58,7 +60,7 @@ export const PG_STATUS_SQL = `WITH db_stats AS (
   FROM pg_stat_database
 ), activity_stats AS (
   SELECT
-    count(*) AS connections,
+    coalesce(sum(CASE WHEN state IS NOT NULL THEN 1 ELSE 0 END),0) AS connections,
     coalesce(sum(CASE WHEN state = 'active' THEN 1 ELSE 0 END),0) AS active_connections,
     coalesce(sum(CASE WHEN state = 'idle' THEN 1 ELSE 0 END),0) AS idle_connections
   FROM pg_stat_activity

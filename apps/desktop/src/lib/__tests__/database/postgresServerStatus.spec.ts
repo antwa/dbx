@@ -103,6 +103,8 @@ describe("formatters", () => {
 describe("PG_STATUS_SQL", () => {
   it("does not use FILTER (PG9.4+ only) — this dashboard targets PG9.2+", () => {
     expect(PG_STATUS_SQL).not.toContain("FILTER");
+    expect(PG_STATUS_SQL).toContain("sum(CASE WHEN state IS NOT NULL THEN 1 ELSE 0 END)");
+    expect(PG_STATUS_SQL).not.toContain("count(*) AS connections");
     expect(PG_STATUS_SQL).toContain("sum(CASE WHEN state = 'active' THEN 1 ELSE 0 END)");
     expect(PG_STATUS_SQL).toContain("sum(CASE WHEN state = 'idle' THEN 1 ELSE 0 END)");
   });
