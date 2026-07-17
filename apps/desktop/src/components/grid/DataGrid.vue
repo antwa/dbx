@@ -174,6 +174,7 @@ import { useDataGridExport } from "@/composables/useDataGridExport";
 import { eventTargetAllowsNativeClipboard, isPlainClipboardShortcut, readTextFromClipboard } from "@/lib/common/clipboard";
 import { claimDataGridPaste, planDataGridPaste } from "@/lib/dataGrid/dataGridClipboard";
 import { DATA_GRID_ROW_NUM_WIDTH, useDataGridColumnResize } from "@/composables/useDataGridColumnResize";
+import { createDataGridColumnStructureSignature } from "@/lib/dataGrid/dataGridColumnWidthState";
 import { useDataGridColumnLayout, useDataGridColumnLayoutState } from "@/composables/useDataGridColumnLayout";
 import { useDataGridCanvasRuntime, type DataGridCanvasRuntime } from "@/composables/useDataGridCanvasRuntime";
 import { useDataGridScrollbars, type DataGridScrollbarsRuntime } from "@/composables/useDataGridScrollbars";
@@ -1774,6 +1775,9 @@ function scrollToColumnIndex(columnIndex: number) {
 
 // --- Column resize composable ---
 const columnWidthDensity = computed(() => settingsStore.editorSettings.columnWidthDensity);
+const columnWidthCacheKey = computed(() => props.cacheKey?.trim() || undefined);
+const columnStructureSignature = computed(() => createDataGridColumnStructureSignature(props.result.columns, props.result.column_types));
+const columnHeaderMeasurementKey = computed(() => [tableFontSize.value, settingsStore.editorSettings.fontFamily]);
 let columnHeaderMeasureContext: CanvasRenderingContext2D | null | undefined;
 
 function measureColumnHeaderText(text: string): number | undefined {
@@ -1792,8 +1796,10 @@ const { initColumnWidths, onResizeStart, autoFitColumn, renderedColumnWidths, to
   columnIndexes: visibleColumnIndexes,
   density: columnWidthDensity,
   compactColumnHeaderActions,
+  cacheKey: columnWidthCacheKey,
+  columnStructureSignature,
   measureHeaderText: measureColumnHeaderText,
-  headerMeasurementKey: tableFontSize,
+  headerMeasurementKey: columnHeaderMeasurementKey,
 });
 const gridStyle = computed(() => ({
   ...columnVars.value,
